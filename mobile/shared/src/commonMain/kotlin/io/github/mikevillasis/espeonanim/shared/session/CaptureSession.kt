@@ -359,6 +359,26 @@ class CaptureSession(private val config: SessionConfig = SessionConfig()) {
         return listOf(SessionEffect.CountdownBeep(sec))
     }
 
+    // ---- Start over ----
+
+    /**
+     * Throw away the calibration, takes and height and go back to Setup for a new performer.
+     * Refused (no change, no effects) while a countdown, recording or finalizing is in progress.
+     */
+    fun startOver(): List<SessionEffect> {
+        val s = _state.value
+        val busy = s.capturing ||
+            (s.step == Step.Calibration && s.calibrationPhase == CalibrationPhase.Finalizing) ||
+            (s.step == Step.Takes && s.takePhase == TakePhase.Finalizing)
+        if (busy) return emptyList()
+        val paths = (listOfNotNull(s.calibration, s.pending) + s.takes).flatMap { it.clip.filePaths() }.distinct()
+        _state.value = SessionState(action = config.action, recommendedKeptTakes = config.recommendedKeptTakes)
+        phaseStartMs = 0L
+        takeCounter = 0
+        lastBeepSecond = -1
+        return if (paths.isEmpty()) emptyList() else listOf(SessionEffect.DeleteFiles(paths))
+    }
+
     // ---- Package ----
 
     fun goToPackage(): Boolean {

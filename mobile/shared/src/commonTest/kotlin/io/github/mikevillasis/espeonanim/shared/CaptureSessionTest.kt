@@ -177,4 +177,60 @@ class CaptureSessionTest {
         s.onRecordingFinished(clip("auto"))
         assertEquals(TakePhase.Review, s.state.value.takePhase)
     }
+
+    @Test
+    fun startOverResetsEverythingAndDeletesClipFiles() {
+        val s = CaptureSession()
+        s.setPerformerHeight(180)
+        var t = s.doCalibration()
+        t = s.recordTake(t, Verdict.Ok, "a1")
+        s.keepTake()
+        t = s.recordTake(t, Verdict.Ok, "a2") // left pending
+        val effects = s.startOver()
+        val expected = listOf("calibration", "a1", "a2").flatMap { listOf("/tmp/$it.mp4", "/tmp/$it.imu.csv") }
+        val deleted = effects.filterIsInstance<SessionEffect.DeleteFiles>().flatMap { it.paths }
+        assertEquals(expected.sorted(), deleted.sorted())
+        val st = s.state.value
+        assertEquals(Step.Setup, st.step)
+        assertEquals(null, st.performerHeightCm)
+        assertEquals(null, st.calibration)
+        assertEquals(null, st.pending)
+        assertTrue(st.takes.isEmpty())
+        assertEquals(CalibrationPhase.Ready, st.calibrationPhase)
+        assertEquals(TakePhase.List, st.takePhase)
+    }
+
+    @Test
+    fun startOverRefusedWhileRecording() {
+        val s = CaptureSession()
+        val t = s.doCalibration()
+        s.startTake(t)
+        s.tick(t + 5_000)
+        assertEquals(TakePhase.Recording, s.state.value.takePhase)
+        assertTrue(s.startOver().isEmpty())
+        assertEquals(Step.Takes, s.state.value.step)
+        assertEquals(TakePhase.Recording, s.state.value.takePhase)
+        // also refused during the countdown and while finalizing
+        s.stopTakeEarly()
+        assertEquals(TakePhase.Finalizing, s.state.value.takePhase)
+        assertTrue(s.startOver().isEmpty())
+        assertEquals(Step.Takes, s.state.value.step)
+        val c = CaptureSession()
+        c.continueFromSetup(); c.startCalibration(0)
+        assertTrue(c.startOver().isEmpty())
+        assertEquals(Step.Calibration, c.state.value.step)
+    }
+
+    @Test
+    fun takeIdsRestartAfterStartOver() {
+        val s = CaptureSession()
+        var t = s.doCalibration()
+        t = s.recordTake(t, Verdict.Ok, "a1")
+        s.keepTake()
+        s.startOver()
+        t = s.doCalibration()
+        s.startTake(t)
+        val e = s.tick(t + 5_000)
+        assertEquals("action_01", (e.single() as SessionEffect.StartRecording).takeId)
+    }
 }

@@ -23,6 +23,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
@@ -283,6 +284,7 @@ private fun TakeList(vm: CaptureViewModel, state: SessionState) {
                     colors = ButtonDefaults.buttonColors(containerColor = OkGreen),
                 ) { Text("Finish", fontSize = 20.sp) }
             }
+            StartOverButton(vm)
         }
     }
 }
@@ -387,6 +389,25 @@ private fun VideoPlayer(path: String, modifier: Modifier) {
     )
 }
 
+/** "Start over" text button plus its confirmation dialog. */
+@Composable
+fun StartOverButton(vm: CaptureViewModel, label: String = "Start over") {
+    var confirm by rememberSaveable { mutableStateOf(false) }
+    TextButton(onClick = { confirm = true }) { Text(label) }
+    if (confirm) StartOverDialog(onConfirm = { confirm = false; vm.startOver() }, onDismiss = { confirm = false })
+}
+
+@Composable
+fun StartOverDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Start over?") },
+        text = { Text("This deletes the calibration and takes on this phone. Your PC pairing is kept.") },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Start over") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
 // ---------------------------------------------------------------- Export
 
 @Composable
@@ -435,6 +456,7 @@ fun ExportScreen(vm: CaptureViewModel, state: SessionState, onPair: () -> Unit) 
                 }
             }
             TextButton(onClick = vm::backToTakes) { Text("Back to takes") }
+            StartOverButton(vm)
         }
     }
 }
