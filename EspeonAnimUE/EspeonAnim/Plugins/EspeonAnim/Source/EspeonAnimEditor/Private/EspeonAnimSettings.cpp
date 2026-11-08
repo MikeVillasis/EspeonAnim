@@ -22,7 +22,7 @@ FString UEspeonAnimSettings::GetResolvedPython() const
 	{
 		return FPaths::ConvertRelativePathToFull(ProcessorPython.FilePath);
 	}
-	return FPaths::Combine(RepoProcessorDir(), TEXT(".venv/Scripts/python.exe"));
+	return FPaths::Combine(GetResolvedWorkingDir(), TEXT(".venv/Scripts/python.exe"));
 }
 
 FString UEspeonAnimSettings::GetResolvedWorkingDir() const

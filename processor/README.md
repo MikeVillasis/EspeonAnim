@@ -6,7 +6,25 @@ Turns a phone recording of a performer into a clean 60 fps animation for the UE5
 
 ## Install
 
-Windows + NVIDIA GPU first (CPU fallback exists but is slow). Python 3.12, [uv](https://docs.astral.sh/uv/):
+Windows 10/11 + NVIDIA GPU first (CPU fallback exists but is slow). Prerequisites: [git](https://git-scm.com/download/win);
+`ffmpeg`/`ffprobe` on `PATH` (the script tries `winget install Gyan.FFmpeg` if missing). No admin rights needed.
+
+**Recommended: the setup script** (also behind the "Install / Repair processor" button in the UE plugin's EspeonAnim Capture tab):
+
+```
+powershell -ExecutionPolicy Bypass -File tools\setup_processor.ps1 -AcceptModelLicenses
+powershell -ExecutionPolicy Bypass -File tools\setup_processor.ps1 -DryRun     # only print the plan
+```
+
+It finds or installs [uv](https://docs.astral.sh/uv/), creates `.venv` (Python 3.12), installs torch (`cu128` when `nvidia-smi`
+finds an NVIDIA GPU, else `cpu`; override with `-Cuda cu128|cpu`), clones GEM-X at the pinned commit, installs the packages,
+downloads the weights into `models/` (files already present with the right size are skipped), then runs `doctor`.
+It is idempotent, so re-running repairs a broken install. Options: `-ProcessorDir`, `-Python`, `-Cuda`, `-DryRun`. Progress lines are
+`ESPEON_SETUP {"step":...,"progress":...,"message":...}`; exit code 0 = ready (2 licenses not accepted, 3 git missing, 4 uv,
+5 install, 6 download, 7 doctor failed). `-AcceptModelLicenses` confirms: GEM-X weights = NVIDIA Open Model License,
+SOMA-X assets = Apache-2.0, MediaPipe pose model = Apache-2.0 (about 7.5 GB download in total).
+
+**Manual fallback** (what the script does):
 
 ```
 uv venv .venv --python 3.12
@@ -16,9 +34,8 @@ uv pip install --python .venv\Scripts\python.exe -e "third_party/gem-x[video]" -
 uv pip install --python .venv\Scripts\python.exe -e ".[test]"
 ```
 
-Weights go in `models/` (download commands in `README_GEMX.md`). `ffmpeg`/`ffprobe` must be on `PATH`.
-Check everything with `python -m espeon_processor doctor`.
-
+(The script pins GEM-X to commit `4aef1452e5df171deff4f293c08e643eb450981e`.) Weights go in `models/` (download commands in
+`README_GEMX.md`). Check everything with `python -m espeon_processor doctor`.
 ## Usage
 
 ```

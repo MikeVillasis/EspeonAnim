@@ -4,12 +4,14 @@
 #include "DesktopPlatformModule.h"
 #include "Editor.h"
 #include "EspeonAnimSettings.h"
+#include "EspeonProcessorSetup.h"
 #include "EspeonQr.h"
 #include "EspeonReceiver.h"
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformApplicationMisc.h"
 #include "HAL/PlatformProcess.h"
 #include "IDesktopPlatform.h"
+#include "Misc/MessageDialog.h"
 #include "Misc/Paths.h"
 #include "Styling/AppStyle.h"
 #include "Subsystems/AssetEditorSubsystem.h"
@@ -39,7 +41,56 @@ void SEspeonAnimTab::Construct(const FArguments&)
 		SNew(SBorder).Padding(10).BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder"))
 		[
 			SNew(SVerticalBox)
-			// ---- receiver + pairing
+			// ---- processor status + install
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 10)
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+					[
+						SNew(STextBlock).Text(LOCTEXT("Proc", "Processor:")).Font(FAppStyle::GetFontStyle("BoldFont"))
+					]
+					+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+					[
+						SNew(STextBlock).AutoWrapText(true)
+						.Text_Lambda([]() { return FText::FromString(FEspeonProcessorSetup::Get().GetStatus().Text); })
+						.ColorAndOpacity_Lambda([]() -> FSlateColor
+						{
+							switch (FEspeonProcessorSetup::Get().GetStatus().State)
+							{
+							case EEspeonProcessorState::Ready:        return FSlateColor(FLinearColor(0.4f, 0.9f, 0.5f));
+							case EEspeonProcessorState::NotInstalled:
+							case EEspeonProcessorState::Problems:
+							case EEspeonProcessorState::InstallFailed: return FSlateColor(FLinearColor(1.f, 0.55f, 0.3f));
+							default:                                   return FSlateColor::UseForeground();
+							}
+						})
+					]
+					+ SHorizontalBox::Slot().AutoWidth().Padding(8, 0, 0, 0)
+					[
+						SNew(SButton).Text(LOCTEXT("Install", "Install / Repair processor"))
+						.ToolTipText(LOCTEXT("InstallTip", "Creates the Python environment and downloads the models (about 7.5 GB). Log: Saved/EspeonAnim/setup.log"))
+						.IsEnabled_Lambda([]() { return !FEspeonProcessorSetup::Get().IsInstalling(); })
+						.OnClicked_Lambda([this]() { InstallProcessor(); return FReply::Handled(); })
+					]
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+				[
+					SNew(SVerticalBox)
+					.Visibility_Lambda([]() { return FEspeonProcessorSetup::Get().IsInstalling() ? EVisibility::Visible : EVisibility::Collapsed; })
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(SProgressBar).Percent_Lambda([]() -> TOptional<float> { return FEspeonProcessorSetup::Get().GetStatus().Progress; })
+					]
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(STextBlock).AutoWrapText(true).ColorAndOpacity(FSlateColor::UseSubduedForeground())
+						.Text_Lambda([]() { return FText::FromString(FEspeonProcessorSetup::Get().GetStatus().StepMessage); })
+					]
+				]
+			]			// ---- receiver + pairing
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				SNew(SHorizontalBox)
@@ -144,6 +195,7 @@ void SEspeonAnimTab::Construct(const FArguments&)
 		]
 	];
 
+	FEspeonProcessorSetup::Get().CheckAsync();
 	RegisterActiveTimer(0.5f, FWidgetActiveTimerDelegate::CreateSP(this, &SEspeonAnimTab::TickRefresh));
 	StartReceiver();
 	RebuildQr();
@@ -218,6 +270,15 @@ void SEspeonAnimTab::NewPairingCode()
 	RebuildQr();
 }
 
+void SEspeonAnimTab::InstallProcessor()
+{
+	if (FEspeonProcessorSetup::Get().IsInstalling()) return;
+	const FText Title = LOCTEXT("InstallTitle", "Install / Repair EspeonAnim processor");
+	if (FMessageDialog::Open(EAppMsgType::YesNo, FEspeonProcessorSetup::GetLicenseNotice(), Title) != EAppReturnType::Yes) return;
+	FString Err;
+	if (!FEspeonProcessorSetup::Get().StartInstall(Err)) LastError = Err;
+	else LastError.Reset();
+}
 void SEspeonAnimTab::ImportFile()
 {
 	IDesktopPlatform* DP = FDesktopPlatformModule::Get();

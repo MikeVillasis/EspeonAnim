@@ -20,11 +20,11 @@ public:
 
 	static const UEspeonAnimSettings* Get() { return GetDefault<UEspeonAnimSettings>(); }
 
-	/** Python interpreter of the processor venv. Empty = <repo>/processor/.venv/Scripts/python.exe, found relative to the project (../../processor). */
+	/** Python interpreter of the processor venv. Empty = <Processor directory>/.venv/Scripts/python.exe. */
 	UPROPERTY(config, EditAnywhere, Category = "Processor", meta = (FilePathFilter = "exe"))
 	FFilePath ProcessorPython;
 
-	/** Working directory for the processor process (must contain the espeon_processor package). Empty = <repo>/processor. */
+	/** Processor directory: contains the espeon_processor package, tools/setup_processor.ps1 and the .venv (the Install / Repair button installs into it). Empty = ../../processor relative to the project directory. */
 	UPROPERTY(config, EditAnywhere, Category = "Processor")
 	FDirectoryPath ProcessorWorkingDir;
 

@@ -33,6 +33,7 @@ private:
 	void RebuildQr();
 	void NewPairingCode();
 	void ImportFile();
+	void InstallProcessor();
 	EActiveTimerReturnType TickRefresh(double InCurrentTime, float InDeltaTime);
 	TSharedRef<ITableRow> GenerateRow(FRowPtr Item, const TSharedRef<STableViewBase>& Owner);
 	FString CurrentHost() const;

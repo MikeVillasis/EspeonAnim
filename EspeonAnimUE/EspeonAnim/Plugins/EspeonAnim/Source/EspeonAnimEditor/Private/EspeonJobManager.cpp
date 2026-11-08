@@ -1,6 +1,7 @@
 #include "EspeonJobManager.h"
 #include "EspeonAnimSettings.h"
 #include "EspeonMotionImporter.h"
+#include "EspeonProcessorSetup.h"
 
 #include "Animation/Skeleton.h"
 #include "Async/Async.h"
@@ -213,7 +214,7 @@ bool FEspeonJobManager::RunProcessor(const FString& Id, FString& OutMotionPath, 
 	if (!FPaths::FileExists(Python))
 	{
 		UE_LOG(LogEspeonJob, Warning, TEXT("Processor python not found at '%s'"), *Python);
-		Fail(Id, TEXT("Processor not installed — see processor/README.md"));
+		Fail(Id, FEspeonProcessorSetup::Get().IsInstalling() ? TEXT("Processor installation is still running - wait for it to finish, then import again") : TEXT("Processor not installed - open the EspeonAnim Capture tab and click Install / Repair processor"));
 		return false;
 	}
 
