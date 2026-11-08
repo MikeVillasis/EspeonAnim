@@ -2,6 +2,9 @@
 # generated messages reflectively.
 -keep class com.google.mediapipe.** { *; }
 -keep class com.google.protobuf.** { *; }
+# MediaPipe's Graph logs with Flogger, which finds its caller by matching its own class names on the
+# stack. Renamed Flogger classes break that ("no caller found on the stack") and pose never starts.
+-keep class com.google.common.flogger.** { *; }
 -dontwarn com.google.mediapipe.proto.**
 # Optional LiteRT-LM classes referenced only by the ImageEmbedder task (unused here, not shipped)
 -dontwarn com.google.ai.edge.litertlm.**
