@@ -107,3 +107,4 @@ captures/
 # Generated animation imports in the test host project
 EspeonAnimUE/EspeonAnim/Content/EspeonAnim/
 processor/third_party/
+*.egg-info/

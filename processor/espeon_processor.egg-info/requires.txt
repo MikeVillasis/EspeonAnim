@@ -1,8 +1,0 @@
-numpy>=2.0
-scipy>=1.13
-matplotlib>=3.8
-opencv-python-headless>=4.9
-mediapipe>=0.10
-
-[test]
-pytest>=8
