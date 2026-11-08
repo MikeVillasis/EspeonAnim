@@ -30,6 +30,7 @@ import io.github.mikevillasis.espeonanim.shared.session.TakePhase
 import io.github.mikevillasis.espeonanim.shared.session.Step
 import io.github.mikevillasis.espeonanim.shared.session.RecordedClip
 import io.github.mikevillasis.espeonanim.shared.session.SessionEffect
+import io.github.mikevillasis.espeonanim.shared.session.ACTION_JUMP
 import io.github.mikevillasis.espeonanim.shared.session.SessionState
 import io.github.mikevillasis.espeonanim.transport.PcLink
 import io.github.mikevillasis.espeonanim.transport.SendRepository
@@ -119,6 +120,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ---- Setup / flow ----
+    fun setAction(action: String) = session.setAction(action)
     fun setHeight(text: String) = session.setPerformerHeight(text.toIntOrNull())
     fun continueFromSetup() = session.continueFromSetup()
     fun backToSetup() = session.backToSetup()
@@ -215,7 +217,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     /** Stops a jump take by itself once the performer has landed and settled. */
     private fun feedJumpDetector(f: PoseFrame) {
         val s = state.value
-        if (s.step != Step.Takes || s.takePhase != TakePhase.Recording || s.action != "jump") return
+        if (s.step != Step.Takes || s.takePhase != TakePhase.Recording || s.action != ACTION_JUMP) return
         val stop = synchronized(engineLock) {
             if (autoStopSent) return
             val r = jumpDetector.update(f.timestampMs, f.landmarks)

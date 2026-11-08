@@ -411,3 +411,138 @@ def test_prepare_clip_flips_mirrored(tmp_path):
     assert l > 200 and r < 50
     l, r = left_right(prepare_clip(src, tmp_path / "flipped", mirrored=True))
     assert l < 50 and r > 200
+
+
+# --- multi-jump takes, micro-flights, generic action ----------------------------------------------------------
+
+def _synthetic_gem(hips_y, contact_on, fps=30.0, extra=None):
+    """Minimal Gem whose hips follow hips_y (m) and whose two feet are planted where contact_on is True.
+    Other joints sit on the hips so only the hips move; `extra(J)` may animate more joints."""
+    names = ["Hips", "Head", "LeftHand", "RightHand", "LeftFoot", "RightFoot", "LeftShin", "RightShin", "LeftForeArm",
+             "RightForeArm"]
+    T = len(hips_y)
+    J = np.zeros((T, len(names), 3))
+    J[:, :, 1] = np.asarray(hips_y)[:, None]
+    if extra:
+        extra(J)
+    c = np.where(np.asarray(contact_on), 0.95, 0.02)[:, None] * np.ones((1, 6))
+    return analysis.Gem(fps, names, np.zeros(len(names), int), J, np.tile(np.eye(3), (T, len(names), 1, 1)), c,
+                        np.zeros((len(names), 3)), np.tile(np.eye(3), (len(names), 1, 1)))
+
+
+def _add_jump(h, on, takeoff, air, rise, crouch_frames=12, crouch=0.25):
+    """Write a crouch -> flight -> landing dip -> settle jump into hips curve `h` and contact mask `on` (in place)."""
+    c0 = takeoff - crouch_frames
+    base = h[c0 - 1]
+    h[c0:takeoff] = base - crouch * np.sin(np.linspace(0, np.pi / 2, crouch_frames)) ** 2
+    u = np.linspace(0, 1, air)
+    h[takeoff:takeoff + air] = h[takeoff - 1] + 4 * rise * u * (1 - u) + 0.0
+    on[takeoff:takeoff + air] = False
+    land = takeoff + air
+    n = 18
+    h[land:land + n] = base - 0.12 * np.sin(np.linspace(0, np.pi, n)) * np.exp(-np.linspace(0, 3, n))
+    h[land + n:] = base
+
+
+def _curve(T=300, three=True, micro=True):
+    h = np.full(T, 1.0)
+    on = np.ones(T, bool)
+    _add_jump(h, on, 45, 14, 0.25)               # 0.47 s, medium
+    if three:
+        _add_jump(h, on, 120, 20, 0.35)          # 0.67 s: the best one
+        _add_jump(h, on, 190, 10, 0.15)          # 0.33 s, small
+    if micro:
+        on[262:268] = False                      # 0.2 s foot flicker in a crouch: hips barely move
+        h[262:268] += 0.01
+    return h, on
+
+
+def test_three_jumps_keep_best_and_window_stays_between_neighbours():
+    h, on = _curve()
+    g = _synthetic_gem(h, on)
+    jumps = analysis.detect_jumps(g)
+    assert [j.takeoff for j in jumps] == [45, 120, 190]          # the micro-flight is not a jump
+    best = analysis.best_jump(jumps)
+    assert best.takeoff == 120 and best.flight_s == pytest.approx(20 / 30)
+    a, b, det = analysis.action_window(g, best, jumps=jumps)
+    assert jumps[0].landing <= a                                  # does not contain the first jump's flight
+    assert a < best.crouch_onset and b > best.landing
+    assert b <= jumps[2].crouch_onset + 1                          # nor the third jump's crouch
+    assert not ((on[a:b] == False).sum() > best.flight_s * 30 + 1)  # only one flight in the window
+    # the same selection when only one jump is in the take: unchanged window rules, no neighbours
+    assert analysis.detect_jump(g).takeoff == 120
+
+
+def test_single_jump_take_is_unchanged_by_neighbour_logic():
+    h, on = _curve(three=False, micro=False)
+    g = _synthetic_gem(h, on)
+    jumps = analysis.detect_jumps(g)
+    assert len(jumps) == 1
+    assert analysis.action_window(g, jumps[0], jumps=jumps)[:2] == analysis.action_window(g, jumps[0])[:2]
+    a, b, det = analysis.action_window(g, jumps[0])
+    assert "end_cut_by_next_jump" not in det and "start_after_previous_jump" not in det
+
+
+def test_micro_flight_is_not_a_jump():
+    h, on = _curve(three=False, micro=True)
+    g = _synthetic_gem(h, on)
+    assert len(analysis.detect_jumps(g)) == 1
+    h2 = np.full(300, 1.0)
+    on2 = np.ones(300, bool)
+    on2[100:108] = False                          # 0.27 s but the hips do not rise (tracking flicker)
+    h2[100:108] += 0.015
+    assert not analysis.detect_jump(_synthetic_gem(h2, on2)).found
+    on3 = np.ones(300, bool)
+    on3[100:106] = False                          # 0.2 s, even with a real rise: too short
+    h3 = np.full(300, 1.0)
+    h3[100:106] += 0.1
+    assert not analysis.detect_jump(_synthetic_gem(h3, on3)).found
+
+
+def test_ballistic_rejects_micro_flights():
+    from espeon_processor.solve import ballistic_correct
+    F = 200
+    z = np.full(F, 90.0)
+    prob = np.ones(F)
+    prob[100:106] = 0.05                          # 0.2 s flicker
+    z[100:106] += 2.0                             # 2 cm
+    d, infos = ballistic_correct(z, prob, ~(prob > 0.5), 30.0)
+    assert not infos and np.abs(d).max() == 0
+    prob[100:110] = 0.05                          # 0.33 s (long enough) but only 2 cm of rise
+    z[100:110] = 90.0 + 2.0
+    d, infos = ballistic_correct(z, prob, ~(prob > 0.5), 30.0)
+    assert not infos
+
+
+def test_idle_trim_cuts_only_idle_ends():
+    T = 240
+    t = np.arange(T) / 30.0
+    sway = np.where((t > 2.0) & (t < 5.0), 0.5 * np.sin(2 * np.pi * 1.0 * t), 0.0)
+
+    def extra(J):
+        J[:, 2, 0] = sway                         # a hand waves for 3 s only
+    g = _synthetic_gem(np.full(T, 1.0), np.ones(T, bool), extra=extra)
+    a, b, det = analysis.idle_trim(g)
+    assert 1.4 < a / 30 < 2.0 and 5.0 < b / 30 < 5.6
+    assert det["mode"] == "idle_trim"
+    g2 = _synthetic_gem(np.full(T, 1.0), np.ones(T, bool))
+    assert analysis.idle_trim(g2)[:2] == (0, T)   # nothing moves: keep everything, no error
+
+
+def test_other_action_scoring_ignores_jumps():
+    from espeon_processor.pipeline import score_take
+    h, on = _curve()
+    g = _synthetic_gem(h, on)
+    meta = {"landmarks": {"mean_visibility": 0.9, "tracked_fraction": 1.0, "cropped_fraction": 0.0}}
+    _, jumps, sc = score_take(g, meta, "ok", "other")
+    assert jumps == [] and sc["jump_detected"] is False
+    _, jumps_j, sc_j = score_take(g, meta, "ok", "jump")
+    assert len(jumps_j) == 3 and sc["score"] >= sc_j["score"] - 1e-9
+    flat = _synthetic_gem(np.full(300, 1.0), np.ones(300, bool))
+    assert score_take(flat, meta, "ok", "other")[2]["score"] > score_take(flat, meta, "ok", "jump")[2]["score"]
+
+
+def test_multiple_jumps_warning_text():
+    from espeon_processor.pipeline import make_warning
+    w = make_warning("multiple_jumps", n=3)
+    assert w["severity"] == "info" and w["message"] == "Found 3 jumps; kept the best one." and w["suggestion"] == "Do one jump per take."

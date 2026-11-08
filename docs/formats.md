@@ -43,6 +43,7 @@ takes/calibration.imu.csv      (optional)
 }
 ```
 
+- `action`: what the performer does, chosen on the app's Setup screen. `jump` (default; also assumed when missing and for bare videos) or `other` (any free movement). `jump` makes the processor look for crouch, flight and landing, trim around them and apply the ballistic height correction; if a take holds several jumps only the best one is kept. `other` skips every jump-specific step and only trims idle time at the start and end. Unknown values are processed like `other`. The UE plugin names the asset `AS_<action>_<timestamp>`.
 - `role`: `action` (one or more; the processor uses the best) or `calibration` (exactly one, A-pose then a slow turn in place).
 - `performer.height_cm`: optional; improves scale. When missing the processor assumes 170 cm and reports it.
 - `rotation_deg`: display rotation of the video stream (0/90/180/270). Readers should still honor the container's rotation metadata.
@@ -92,6 +93,8 @@ Units and axes are **Unreal's**: centimeters, Z up, X forward, Y right (left-han
 }
 ```
 
+Warning severities (`block`, `warn`, `info`) are not written to the report; `info` codes (such as `multiple_jumps`) never lower `quality`. Action `other` never produces jump-specific warnings (`no_jump_detected`, `trim_fallback`, `weak_jump`, `multiple_jumps`); its `details.trim` records the idle-trim window (`mode: "idle_trim"`), and `details.trim.jumps_found` lists every jump found in a multi-jump take.
+
 ## 4. Guidance and warning codes
 
 Shared by the phone app and processor.
@@ -109,6 +112,7 @@ Shared by the phone app and processor.
 | `too_far` / `too_close` | warn | Standing person fills under 40% / over 70% of the frame height | Fill about half the frame height, with room above your head to jump |
 | `motion_blur` | warn | Fast motion blurred | More light lets the camera use a faster shutter |
 | `low_fps` | warn | Under 30 fps | Use 60 fps if your phone supports it |
+| `multiple_jumps` | info | Processor only, action `jump`: the take contains more than one jump (each at least 0.25 s of airtime and 5 cm of hip rise); the message reads "Found N jumps; kept the best one" and the best one (longest airtime, penalised for an unstable landing) is trimmed out with its crouch, landing and settle | Do one jump per take |
 
 Framing thresholds (single source of truth; mirrored in `GuidanceConfig.kt` and `processor/espeon_processor/framing.py`, change all three together):
 

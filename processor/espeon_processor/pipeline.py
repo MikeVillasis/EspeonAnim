@@ -17,6 +17,7 @@ from .validate import direction_error
 FRAMING_CODES = {"too_far", "too_close", "camera_low", "camera_high"}
 PROCESSOR_VERSION = "0.1.0"
 ASSUMED_HEIGHT_CM = 170.0
+ACTIONS = ("jump", "other")
 
 # code -> (severity, message, suggestion). severity: info | warn | block (block => quality "poor")
 WARNINGS = {
@@ -44,6 +45,7 @@ WARNINGS = {
                                   "Check the height entered in the app; a wrong camera distance also skews it."),
     "trim_fallback": ("warn", "The action window could not be located precisely; a fallback was used.",
                       "Make sure the whole jump, including the landing, is in the video."),
+    "multiple_jumps": ("info", "Found {n} jumps; kept the best one.", "Do one jump per take."),
     "weak_jump": ("warn", "The jump is small, so the reconstructed airtime and height may be inaccurate.",
                   "Jump higher and with a clear crouch beforehand."),
 }
@@ -69,6 +71,7 @@ def framing_for_take(take, landmarks_file, gem_fps=30.0, frame_range=None):
 
 def make_warning(code, **over):
     sev, msg, sug = WARNINGS[code]
+    msg = msg.format(**over) if "{" in msg and over else msg
     return {"code": code, "message": over.get("message", msg), "suggestion": over.get("suggestion", sug), "severity": sev}
 
 
@@ -98,20 +101,25 @@ def default_device():
 GUIDANCE_SCORE = {"ok": 1.0, "warn": 0.6, "poor": 0.2, None: 0.7}
 
 
-def score_take(gem: Gem, meta: dict, verdict):
-    """Score one action take and report the components."""
-    jump = analysis.detect_jump(gem)
+def score_take(gem: Gem, meta: dict, verdict, action="jump"):
+    """Score one action take and report the components. For the generic action ("other") there is no jump to look for:
+    the score depends on tracking quality, visibility and cropping only."""
+    jumps = analysis.detect_jumps(gem) if action == "jump" else []
+    jump = analysis.best_jump(jumps)
     lm = meta.get("landmarks") or {}
     vis = lm.get("mean_visibility", 0.5)
     tracked = lm.get("tracked_fraction", 1.0)
     cropped = lm.get("cropped_fraction", 0.0)
-    jump_s = 0.0 if not jump.found else 0.6 + 0.4 * min(1.0, jump.hips_rise_m / 0.15)
+    if action != "jump":
+        jump_s = 1.0
+    else:
+        jump_s = 0.0 if not jump.found else 0.6 + 0.4 * min(1.0, jump.hips_rise_m / 0.15)
     guid = GUIDANCE_SCORE.get(verdict, 0.7)
     score = 0.4 * jump_s + 0.2 * vis + 0.2 * tracked + 0.15 * guid + 0.05 * (1 - cropped) - 0.3 * cropped
     on, _ = analysis.foot_contacts(gem.contact)
     lo = max(0, int(jump.landing) - 5) if jump.found else 0
     flick = int((np.diff(on[lo:lo + int(gem.fps)].astype(int), axis=0) != 0).sum())
-    return jump, {"landing_contact_flickers": flick, "score": round(float(score), 4), "jump_detected": bool(jump.found),
+    return jump, jumps, {"landing_contact_flickers": flick, "score": round(float(score), 4), "jump_detected": bool(jump.found), "jumps_found": len(jumps),
                   "jump_hips_rise_m": round(float(jump.hips_rise_m), 3), "flight_s": round(float(jump.flight_s), 3),
                   "crouch_depth_m": round(float(jump.crouch_depth_m), 3), "mean_landmark_visibility": round(vis, 3),
                   "tracked_fraction": round(tracked, 3), "cropped_fraction": round(cropped, 3),
@@ -122,8 +130,9 @@ def _round(d, n=4):
     return {k: (round(float(v), n) if isinstance(v, (float, np.floating)) else v) for k, v in d.items()}
 
 
-def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_intermediate=False, emit=None, ballistic=True):
-    """Run the whole pipeline. Returns {"motion": path, "report": path}. Raises ProcessorError on failure."""
+def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_intermediate=False, emit=None, ballistic=True, action=None):
+    """Run the whole pipeline. Returns {"motion": path, "report": path}. Raises ProcessorError on failure.
+    `action` overrides the manifest's action ("jump" | "other")."""
     from .debug_plots import contact_sheet, height_plot, root_xy_plot
     prog = Progress(emit)
     t_start = time.time()
@@ -141,6 +150,10 @@ def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_interme
     except FileNotFoundError:
         raise ProcessorError(f"unknown skeleton profile {skeleton!r}")
     rig = Rig(profile)
+    action = action or cap.action_type or "jump"
+    if action not in ACTIONS:
+        action = "other"          # unknown actions get the generic, jump-agnostic processing
+    is_jump = action == "jump"
     takes = ([cap.calibration] if cap.calibration else []) + list(cap.actions)
     prog("extract", 0.02, f"{len(cap.actions)} action take(s)" + (", 1 calibration take" if cap.calibration else ""))
 
@@ -160,9 +173,9 @@ def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_interme
     prog("analyze", 0.86, "Scoring takes")
     scored = []
     for t in cap.actions:
-        jump, sc = score_take(gems[t.id], metas[t.id], t.guidance_verdict)
+        jump, jumps, sc = score_take(gems[t.id], metas[t.id], t.guidance_verdict, action)
         sc["id"] = t.id
-        scored.append((sc["score"], t, jump, sc))
+        scored.append((sc["score"], t, (jump, jumps), sc))
     scored.sort(key=lambda x: -x[0])
     tie = [x for x in scored if x[0] >= scored[0][0] - 0.02]
     selection = {"reason": "highest score"}
@@ -172,7 +185,7 @@ def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_interme
                                f"contact flickers (airtime {best[3]['flight_s']} s, {best[3]['landing_contact_flickers']} flickers)"}
         scored.remove(best)
         scored.insert(0, best)
-    _, take, jump, take_score = scored[0]
+    _, take, (jump, jumps), take_score = scored[0]
     gem, meta = gems[take.id], metas[take.id]
     warnings, assumptions = [], []
 
@@ -205,21 +218,31 @@ def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_interme
     assumptions.extend(cap.notes)
 
     # --- trim ---------------------------------------------------------------------------------------
-    win = analysis.action_window(gem, jump)
-    trim = {}
-    if win is None:
-        a, b = 0, gem.T
-        warnings.append(make_warning("no_jump_detected"))
-        trim["fallback"] = "whole clip"
+    trim = {"action": action}
+    if not is_jump:
+        a, b, det = analysis.idle_trim(gem)
+        trim.update(det)
     else:
-        a, b, trim = win
-        trim = dict(trim)
-        if "recovery" in trim:
-            warnings.append(make_warning("trim_fallback", message="Stable standing after landing was not found: " + trim["recovery"]))
-        if jump.hips_rise_m < 0.06:
-            warnings.append(make_warning("weak_jump"))
-        for n in jump.notes:
-            trim.setdefault("notes", []).append(n)
+        win = analysis.action_window(gem, jump, jumps=jumps)
+        if win is None:
+            a, b = 0, gem.T
+            warnings.append(make_warning("no_jump_detected"))
+            trim["fallback"] = "whole clip"
+        else:
+            a, b, det = win
+            trim.update(det)
+            if "recovery" in trim:
+                warnings.append(make_warning("trim_fallback", message="Stable standing after landing was not found: " + trim["recovery"]))
+            if jump.hips_rise_m < 0.06:
+                warnings.append(make_warning("weak_jump"))
+            for n in jump.notes:
+                trim.setdefault("notes", []).append(n)
+            if len(jumps) > 1:
+                warnings.append(make_warning("multiple_jumps", n=len(jumps)))
+                trim["jumps_found"] = [{"takeoff_s": round(j.takeoff / gem.fps, 3), "landing_s": round(j.landing / gem.fps, 3),
+                                        "airtime_s": round(j.flight_s, 3), "hips_rise_m": round(j.hips_rise_m, 3),
+                                        "stable_landing": bool(j.stable_landing), "score": round(j.score, 3)} for j in jumps]
+                trim["kept_jump_takeoff_s"] = round(jump.takeoff / gem.fps, 3)
     fps_g = gem.fps
     trim.update({"start_s": round(a / fps_g, 3), "end_s": round(b / fps_g, 3), "start_frame": int(a), "end_frame": int(b)})
     if jump.found:
@@ -262,7 +285,8 @@ def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_interme
     # --- retarget + cleanup ---------------------------------------------------------------------------
     prog("retarget", 0.90, "Retargeting to " + skeleton)
     t0 = time.time()
-    solved = solve(gem, (a, b), rig, scale, ballistic=ballistic)
+    solved = solve(gem, (a, b), rig, scale, ballistic=ballistic and is_jump,
+                   jump_span=(jump.takeoff, jump.landing) if is_jump and jump.found else None)
     timings["solve_s"] = round(time.time() - t0, 2)
     prog("cleanup", 0.95, "Cleanup done")
     if solved.stats["foot_slide_cm_before"] > 4.0:
@@ -297,7 +321,7 @@ def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_interme
         "details": {"processor_version": PROCESSOR_VERSION, "skeleton": skeleton, "device": device,
                     "take_scores": [s[3] for s in scored], "calibration": calib_info, "scale": round(scale, 4),
                     "trim": trim, "retarget_direction_error_deg": {"mean": round(mean_err, 3), **{k: round(v, 2) for k, v in seg_err.items()}},
-                    "selection": selection, "ballistic_flights": solved.stats.get("ballistic", []), "ballistic_enabled": ballistic,
+                    "selection": selection, "ballistic_flights": solved.stats.get("ballistic", []), "ballistic_enabled": bool(ballistic and is_jump), "action": action,
                     "timings": timings, "input": str(input_path)},
     }
     timings["total_s"] = round(time.time() - t_start, 1)

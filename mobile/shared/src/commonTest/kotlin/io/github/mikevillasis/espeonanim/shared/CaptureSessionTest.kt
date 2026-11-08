@@ -57,6 +57,37 @@ class CaptureSessionTest {
     }
 
     @Test
+    fun actionDefaultsToJumpAndCanBeChangedOnSetupOnly() {
+        val s = CaptureSession()
+        assertEquals("jump", s.state.value.action)
+        s.setAction("other")
+        assertEquals("other", s.state.value.action)
+        s.setAction("dance") // unknown values are ignored
+        assertEquals("other", s.state.value.action)
+        s.setAction("jump")
+        assertEquals("jump", s.state.value.action)
+        s.setAction("other")
+        s.continueFromSetup()
+        s.setAction("jump") // not on Setup any more
+        assertEquals("other", s.state.value.action)
+    }
+
+    @Test
+    fun chosenActionGoesIntoManifestAndSurvivesStartOver() {
+        val s = CaptureSession()
+        s.setAction("other")
+        var t = s.doCalibration()
+        t = s.recordTake(t, Verdict.Ok, "a1")
+        s.keepTake()
+        assertTrue(s.goToPackage())
+        val plan = s.buildPackage("2026-11-09T03:12:00Z", AppInfo("EspeonAnim", "0.1.0", "android"), DeviceInfo("G", "P", "13"))
+        assertEquals("other", plan.manifest.action)
+        assertEquals("other", io.github.mikevillasis.espeonanim.shared.manifest.Manifest.parse(plan.manifest.toJson()).action)
+        s.startOver()
+        assertEquals("other", s.state.value.action)
+    }
+
+    @Test
     fun fullFlowProducesPackage() {
         val s = CaptureSession()
         s.setPerformerHeight(178)
