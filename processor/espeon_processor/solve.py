@@ -211,7 +211,10 @@ def solve(gem: Gem, window, rig: Rig, scale: float, out_fps=60.0, rt: Retargeter
     pel_w[:, :2] -= cxy[0]                      # root starts at the origin
     root_t[:, :2] = cxy - cxy[0]
     stats['root_travel_cm'] = [round(float(v), 2) for v in root_t[-1, :2]]
-    root_t[:, 2] = wflight * clearance
+    # The root stays on the floor: the jump height lives in the pelvis. Single-node playback in a level
+    # and CharacterMovement in Walking mode both drop root-motion Z, so a lifted root makes the jump vanish.
+    root_t[:, 2] = 0.0
+    stats['flight_clearance_max_cm'] = round(float((wflight * clearance).max()), 2)
     pelvis_t = pel_w - root_t
 
     # --- foot locking -------------------------------------------------------------------------

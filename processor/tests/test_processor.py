@@ -130,7 +130,8 @@ def test_jump_has_crouch_flight_landing(jump1):
     assert pel.min() < stand - 15                    # crouch
     assert pel.max() > stand + 5                     # lift
     flight = ~s.on60.any(1)
-    assert flight.sum() >= 15 and np.array(d["root_translation"])[flight, 2].max() > 2
+    assert flight.sum() >= 15 and pel[flight].max() > stand + 5     # the lift is in the pelvis...
+    assert np.abs(np.array(d["root_translation"])[:, 2]).max() < 1e-6  # ...and the root stays on the floor
 
 
 @needs_gem
