@@ -93,6 +93,7 @@ testdata/
 __pycache__/
 *.pyc
 .venv/
+processor/.python/
 .pytest_cache/
 processor/models/
 processor/out/

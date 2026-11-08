@@ -16,7 +16,7 @@ powershell -ExecutionPolicy Bypass -File tools\setup_processor.ps1 -AcceptModelL
 powershell -ExecutionPolicy Bypass -File tools\setup_processor.ps1 -DryRun     # only print the plan
 ```
 
-It finds or installs [uv](https://docs.astral.sh/uv/), creates `.venv` (Python 3.12), installs torch (`cu128` when `nvidia-smi`
+It finds or installs [uv](https://docs.astral.sh/uv/), creates `.venv` (Python 3.12, installed by uv into `processor\.python` rather than AppData so the editor can always run it; a venv pointing elsewhere is recreated), installs torch (`cu128` when `nvidia-smi`
 finds an NVIDIA GPU, else `cpu`; override with `-Cuda cu128|cpu`), clones GEM-X at the pinned commit, installs the packages,
 downloads the weights into `models/` (files already present with the right size are skipped), then runs `doctor`.
 It is idempotent, so re-running repairs a broken install. Options: `-ProcessorDir`, `-Python`, `-Cuda`, `-DryRun`. Progress lines are
@@ -27,7 +27,8 @@ SOMA-X assets = Apache-2.0, MediaPipe pose model = Apache-2.0 (about 7.5 GB down
 **Manual fallback** (what the script does):
 
 ```
-uv venv .venv --python 3.12
+$env:UV_PYTHON_INSTALL_DIR = "$PWD\.python"
+uv venv .venv --python 3.12 --managed-python
 uv pip install --python .venv\Scripts\python.exe torch torchvision --index-url https://download.pytorch.org/whl/cu128
 git clone --depth 1 https://github.com/NVlabs/gem-x third_party/gem-x
 uv pip install --python .venv\Scripts\python.exe -e "third_party/gem-x[video]" --extra-index-url https://download.pytorch.org/whl/cu128
