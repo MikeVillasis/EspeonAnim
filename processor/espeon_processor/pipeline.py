@@ -9,7 +9,7 @@ from .framing import framing_codes
 from .analysis import Gem
 from .gem_stage import ProcessorError, landmark_stats, reconstruct
 from .motion_io import motion_dict, validate_motion, write_motion
-from .package import load_capture
+from .package import load_capture, take_mirrored
 from .skeleton import Profile, Rig
 from .solve import manny_leg_length, solve
 from .validate import direction_error
@@ -150,7 +150,8 @@ def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_interme
     span = 0.83 / len(takes)
     for k, t in enumerate(takes):
         lo = 0.02 + k * span
-        npz, meta = reconstruct(t.path, cache, device, keep_intermediate, prog.sub("reconstruct", lo, lo + span), t.id)
+        npz, meta = reconstruct(t.path, cache, device, keep_intermediate, prog.sub("reconstruct", lo, lo + span), t.id,
+                               mirrored=take_mirrored(t.info))
         gems[t.id], metas[t.id] = Gem.load(npz), meta
         meta["landmarks_file"] = str(Path(npz).with_name("landmarks.npz"))
     timings["reconstruct_s"] = round(time.time() - t0, 1)

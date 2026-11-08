@@ -35,7 +35,7 @@ takes/calibration.imu.csv      (optional)
       "width": 1920, "height": 1080,
       "rotation_deg": 90,
       "duration_s": 6.9,
-      "camera": { "focal_length_px": 1450.0, "lens_facing": "back" },
+      "camera": { "focal_length_px": 1450.0, "lens_facing": "back", "mirrored": false },
       "guidance": { "verdict": "ok", "warnings": ["low_light"] }
     },
     { "id": "calibration", "role": "calibration", "file": "takes/calibration.mp4", "fps": 59.94, "width": 1920, "height": 1080, "rotation_deg": 90, "duration_s": 16.0 }
@@ -47,6 +47,7 @@ takes/calibration.imu.csv      (optional)
 - `performer.height_cm`: optional; improves scale. When missing the processor assumes 170 cm and reports it.
 - `rotation_deg`: display rotation of the video stream (0/90/180/270). Readers should still honor the container's rotation metadata.
 - `camera.focal_length_px`: optional, focal length in pixels at the stored resolution (from Camera2 intrinsics / AVFoundation). When missing the processor assumes a 70° horizontal FOV.
+- `camera.mirrored`: boolean, whether the stored video is horizontally mirrored (a selfie-style flip). The app records un-mirrored for both cameras (`MIRROR_MODE_OFF`), so it writes `false`. Optional; when missing (older packages) readers treat it as `false`, which is the CameraX VideoCapture default. When `true` the processor flips every frame horizontally before analysis, so everything downstream sees an un-mirrored video.
 - `guidance.verdict`: `ok` | `warn` | `poor`. `warnings` is a list of codes from §4.
 - IMU CSV columns: `t_s,gx,gy,gz` — gravity vector in the camera/device frame (m/s²), timestamped on the video clock. Used to recover camera tilt.
 

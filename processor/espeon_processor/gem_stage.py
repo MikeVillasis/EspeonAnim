@@ -72,11 +72,11 @@ def landmark_stats(npz_path, frame_range=None):
             "person_height_fraction": height_frac, "frames": int(len(L))}
 
 
-def reconstruct(video, cache_root, device="cuda", keep_intermediate=False, progress=None, label=""):
+def reconstruct(video, cache_root, device="cuda", keep_intermediate=False, progress=None, label="", mirrored=False):
     """Run (or fetch from cache) the reconstruction for `video`. Returns (gem_world.npz path, meta dict)."""
     from .video import prepare_clip
     progress = progress or (lambda f, m: None)
-    key = file_key(video)
+    key = file_key(video) + ("-mirrored" if mirrored else "")  # flipped input is a different reconstruction
     cdir = Path(cache_root) / key
     npz, meta_p = cdir / "gem_world.npz", cdir / "meta.json"
     if npz.exists() and meta_p.exists():
@@ -87,7 +87,7 @@ def reconstruct(video, cache_root, device="cuda", keep_intermediate=False, progr
     cdir.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     progress(0.0, f"{label}: preparing video")
-    prepared = prepare_clip(video, cdir)
+    prepared = prepare_clip(video, cdir, mirrored=mirrored)
     nframes, fps, w, h = _frames_estimate(prepared)
     dur30 = (nframes / fps) if nframes else 8.0
     motion_pt, lm_npz, log = cdir / "motion.pt", cdir / "landmarks.npz", cdir / "run.log"

@@ -9,6 +9,7 @@ import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.core.AspectRatio
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.MirrorMode
 import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
@@ -93,6 +94,9 @@ class CameraController(private val context: Context) {
         val vcBuilder = VideoCapture.Builder(recorder)
             .setTargetFrameRate(range)
             .setTargetRotation(rotation)
+            // Explicit: recordings are un-mirrored (like a normal photo) for both cameras. The manifest says so
+            // (camera.mirrored = false) and the processor relies on it. Never rely on the default.
+            .setMirrorMode(MirrorMode.MIRROR_MODE_OFF)
         Camera2Interop.Extender(vcBuilder)
             .setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
         val vc = vcBuilder.build()

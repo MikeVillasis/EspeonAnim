@@ -48,7 +48,7 @@ class ManifestTest {
         for (key in listOf(
             "\"format\": \"espeon-package\"", "\"version\": \"1.0\"", "\"created_utc\"", "\"os_version\"",
             "\"height_cm\": 175", "\"action\": \"jump\"", "\"imu_file\"", "\"rotation_deg\": 90", "\"duration_s\"",
-            "\"focal_length_px\": 1450.0", "\"lens_facing\": \"back\"", "\"verdict\": \"ok\"", "\"role\": \"action\"",
+            "\"focal_length_px\": 1450.0", "\"lens_facing\": \"back\"", "\"mirrored\": false", "\"verdict\": \"ok\"", "\"role\": \"action\"",
             "\"role\": \"calibration\"",
         )) assertTrue(json.contains(key), "missing $key in:\n$json")
         // Optional fields are omitted, not null.
@@ -78,6 +78,10 @@ class ManifestTest {
         assertEquals(175, m.performer.heightCm)
         assertEquals(TakeRole.Calibration, m.takes[1].role)
         assertNull(m.takes[1].guidance)
+        // Old packages have no camera.mirrored: treated as not mirrored (CameraX VideoCapture default).
+        assertFalse(m.takes[0].camera!!.mirrored)
+        val flagged = Manifest.parse(spec.replace("\"lens_facing\": \"back\"", "\"lens_facing\": \"front\", \"mirrored\": true"))
+        assertTrue(flagged.takes[0].camera!!.mirrored)
     }
 
     @Test
