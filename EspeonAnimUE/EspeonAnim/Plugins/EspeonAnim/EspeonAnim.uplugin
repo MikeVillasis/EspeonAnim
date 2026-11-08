@@ -1,0 +1,20 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "EspeonAnim",
+	"Description": "Turns phone-video motion (motion.json) into game-ready AnimSequences on the UE5 mannequin.",
+	"Category": "Animation",
+	"CreatedBy": "EspeonAnim",
+	"CanContainContent": true,
+	"IsBetaVersion": true,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "EspeonAnimEditor",
+			"Type": "Editor",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [ "Win64" ]
+		}
+	]
+}
