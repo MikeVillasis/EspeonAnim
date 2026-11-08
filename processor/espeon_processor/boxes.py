@@ -10,7 +10,7 @@ import numpy as np
 MODEL = Path(__file__).resolve().parents[1] / "models" / "pose_landmarker_heavy.task"
 
 
-def _detect(frames, fps=30.0, model=MODEL):
+def _detect(frames, fps=30.0, model=MODEL, landmarks_out=None):
     import mediapipe as mp
     from mediapipe.tasks.python import vision, BaseOptions
     opts = vision.PoseLandmarkerOptions(
@@ -18,6 +18,8 @@ def _detect(frames, fps=30.0, model=MODEL):
         running_mode=vision.RunningMode.VIDEO, num_poses=1,
         min_pose_detection_confidence=0.3, min_pose_presence_confidence=0.3, min_tracking_confidence=0.3)
     boxes = np.full((len(frames), 4), np.nan, np.float32)
+    if landmarks_out is not None:
+        landmarks_out[:] = [np.full((33, 4), np.nan, np.float32) for _ in range(len(frames))]
     with vision.PoseLandmarker.create_from_options(opts) as lm:
         for i in range(len(frames)):
             f = np.ascontiguousarray(frames[i])
@@ -26,6 +28,10 @@ def _detect(frames, fps=30.0, model=MODEL):
             if not res.pose_landmarks:
                 continue
             pts = np.array([[p.x * w, p.y * h] for p in res.pose_landmarks[0]], np.float32)
+            if landmarks_out is not None:  # normalised x, y, visibility, presence
+                landmarks_out[i] = np.array([[p.x, p.y, p.visibility if p.visibility is not None else np.nan,
+                                              p.presence if p.presence is not None else np.nan]
+                                             for p in res.pose_landmarks[0]], np.float32)
             vis = np.array([min(p.visibility, p.presence) if p.presence is not None else p.visibility
                             for p in res.pose_landmarks[0]])
             ok = vis > 0.2
@@ -51,9 +57,9 @@ def _smooth(b, win=9):
     return np.stack([np.convolve(pad[:, c], k, mode="valid") for c in range(4)], 1).astype(np.float32)
 
 
-def person_boxes(frames_rgb, fps=30.0, pad=0.15, return_observed=False):
+def person_boxes(frames_rgb, fps=30.0, pad=0.15, return_observed=False, landmarks_out=None):
     h, w = frames_rgb[0].shape[:2]
-    raw = _detect(frames_rgb, fps)
+    raw = _detect(frames_rgb, fps, landmarks_out=landmarks_out)
     filled, observed = _fill(raw)
     filled = _smooth(filled)
     cx, cy = (filled[:, 0] + filled[:, 2]) / 2, (filled[:, 1] + filled[:, 3]) / 2

@@ -88,5 +88,6 @@ def export(motion_pt, out_npz, soma_assets=SOMA_ASSETS, device="cuda"):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("motion_pt"); ap.add_argument("out_npz", nargs="?")
+    ap.add_argument("--device", default="cuda")
     a = ap.parse_args()
-    export(a.motion_pt, a.out_npz or Path(a.motion_pt).with_name("gem_world.npz"))
+    export(a.motion_pt, a.out_npz or Path(a.motion_pt).with_name("gem_world.npz"), device=a.device)

@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "espeon-processor"
+version = "0.1.0"
+description = "EspeonAnim processor: phone video of a jump -> clean 60 fps Manny animation (motion.json)"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=2.0",
+    "scipy>=1.13",
+    "matplotlib>=3.8",
+    "opencv-python-headless>=4.9",   # frame reading for brightness checks (mediapipe also provides opencv)
+    "mediapipe>=0.10",               # person boxes + landmark visibility (Apache-2.0)
+    # torch / torchvision (CUDA 12.8 wheels) and gem-x are installed separately, see README.md
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+espeon-processor = "espeon_processor.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["espeon_processor*"]
+
+[tool.setuptools.package-data]
+espeon_processor = ["skeletons/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
