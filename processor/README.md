@@ -74,7 +74,7 @@ debug/height_contacts.png pelvis/sole heights and foot contacts
    `R_manny = R_soma(t) R_soma_rest^-1 R_matched_rest`, converted to parent-local. Spine1/2/Chest are distributed over
    spine_01..05. Pelvis is placed so Manny's hip joints follow the performer's.
 7. **Ground and root** (`solve.py`): floor offset from confidently planted feet (a slowly varying curve, because GEM's floor drifts
-   by several cm), root = ground projection of the pelvis, lifted by foot clearance during flight; the performer's initial
+   by several cm), root = support centre of the planted feet on the floor (Z stays 0, the jump height is in the pelvis); the performer's initial
    facing is rotated to +Y and the root starts at the origin.
 8. **Cleanup** (`cleanup.py`): zero-phase Butterworth on quaternions (9 Hz, sign-continuous) and translations (7 Hz),
    foot locking per contact phase (ankle/ball pinned to the phase mean, two-bone IK, knee pole from the original pose, 4-frame
@@ -91,6 +91,6 @@ python tools/make_test_package.py   # builds out/test_package.espeon from testda
 
 ## Known limits
 
-- GEM-X underestimates jump height (hips rise ~0.1-0.2 m); contacts decide flight time. Root Z lift follows the foot clearance.
+- GEM-X underestimates jump height (hips rise ~0.1-0.2 m); contacts decide flight time. The root never lifts; the pelvis carries the flight.
 - Only a single person, static camera; fingers, twist and IK bones keep their reference pose.
 - Camera intrinsics and IMU files in the package are not used yet.

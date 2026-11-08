@@ -74,7 +74,7 @@ Units and axes are **Unreal's**: centimeters, Z up, X forward, Y right (left-han
 
 - `skeleton` names a skeleton profile in `processor/espeon_processor/skeletons/<name>.json` (bone names, parents and reference local transforms dumped from Unreal).
 - `local_rotations[f][b]` is bone `b`'s rotation relative to its parent, in the same space as Unreal's reference pose, so it can be keyed directly onto the skeleton.
-- Root motion lives on `root` (ground-projected travel plus vertical lift for jumps). `pelvis_translation` carries the remaining offset.
+- Root motion lives on `root`: ground-projected travel only, Z always 0. The jump height is in `pelvis_translation`, because level playback and CharacterMovement in Walking mode drop root-motion Z.
 - Bones not driven by the processor (fingers, twist bones, IK bones) are omitted from `bones` and keep their reference pose.
 
 ## 3. Processing report (`report.json`)
