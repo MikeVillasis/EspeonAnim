@@ -41,11 +41,23 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
+
+        // All target phones are arm64. Dropping the other MediaPipe native libs saves ~50 MB.
+        // For emulator use (x86_64 emulator images), add "x86_64" locally: abiFilters += "x86_64"
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // LOCAL FALLBACK ONLY: no release signing config exists yet, so sign with the machine's
+            // debug keystore to get an installable APK. Replace with a real signing config before
+            // distributing. No keystore or secret is committed.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     compileOptions {
