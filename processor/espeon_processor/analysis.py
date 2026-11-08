@@ -73,6 +73,10 @@ def _smooth(x, fps, win_s=0.15):
     return savgol_filter(x, w, 2, mode="interp")
 
 
+MIN_FLIGHT_S = 0.25          # both feet must be off the ground at least this long to count as a jump
+MIN_CLEARANCE_M = 0.05       # ... and the hips must rise at least this much (GEM underestimates, so this is small)
+
+
 @dataclass
 class JumpInfo:
     found: bool = False
@@ -85,50 +89,80 @@ class JumpInfo:
     flight_s: float = 0.0
     stand_height_m: float = 0.0
     notes: list = field(default_factory=list)
+    stable_landing: bool = True  # standing height and stillness recovered after landing (before the next jump)
+    flickers: int = 0            # foot-contact changes in the second after landing
+    score: float = 0.0
 
 
-def detect_jump(g: Gem, min_flight_s=0.09, min_crouch_m=0.03) -> JumpInfo:
+def detect_jumps(g: Gem, min_flight_s=MIN_FLIGHT_S, min_clearance_m=MIN_CLEARANCE_M, min_crouch_m=0.03):
+    """All jumps in a take, in time order. A jump is a run of frames with both feet off the ground that lasts at
+    least `min_flight_s` and lifts the hips by at least `min_clearance_m` (shorter / lower "flights" are tracking
+    noise, e.g. a foot flicker during a crouch). Each jump carries its crouch onset, bounded by the previous jump's
+    landing, and a quality score used by `best_jump`: airtime, minus a penalty for an unstable landing."""
     fps, T = g.fps, g.T
     on, _ = foot_contacts(g.contact)
     flight = ~on.any(1)
     hips = _smooth(g.J[:, 0, 1], fps)
-    best, best_score = JumpInfo(), -1.0
+    out = []
+    bound = 0                    # earliest frame a crouch may start: after the previous landing has been absorbed
     for s, e in runs(flight):
         dur = (e - s) / fps
-        if dur < min_flight_s or s < 2:
+        rise = hips[s:min(T, e + int(0.2 * fps))].max() - hips[s]
+        if dur < min_flight_s or s < 2 or rise < min_clearance_m:
             continue
-        lo = max(0, s - int(1.5 * fps))
+        lo = max(bound, s - int(1.5 * fps))
         i_min = lo + int(np.argmin(hips[lo:s + 1]))
-        lo2 = max(0, i_min - int(1.5 * fps))
+        lo2 = max(bound, i_min - int(1.5 * fps))
         h_ref = hips[lo2:i_min + 1].max()
         drop = h_ref - hips[i_min]
-        rise = hips[s:min(T, e + int(0.2 * fps))].max() - hips[s]
-        score = 0.5 * dur + max(rise, 0) + 0.5 * max(drop, 0)
-        if score <= best_score:
-            continue
-        info = JumpInfo(True, s, e, 0, i_min, float(drop), float(rise), float(dur), float(h_ref))
+        info = JumpInfo(True, int(s), int(e), 0, int(i_min), float(drop), float(rise), float(dur), float(h_ref))
         if drop >= min_crouch_m:
             thr = h_ref - 0.1 * drop
             idx = np.flatnonzero(hips[lo2:i_min + 1] >= thr)
-            info.crouch_onset = int(lo2 + idx[-1]) if len(idx) else lo2
+            info.crouch_onset = int(lo2 + idx[-1]) if len(idx) else int(lo2)
         else:
-            info.crouch_onset = max(0, s - int(0.6 * fps))
+            info.crouch_onset = int(max(bound, s - int(0.6 * fps)))
             info.notes.append("no preparatory crouch found; using takeoff - 0.6 s")
-        best, best_score = info, score
-    return best
+        out.append(info)
+        bound = int(e) + (int(np.argmin(hips[e:e + int(0.5 * fps)])) if e < T else 0)
+    for k, j in enumerate(out):
+        nxt = out[k + 1].crouch_onset if k + 1 < len(out) else None
+        j.stable_landing = recovery_frame(g, j, limit=nxt) is not None
+        lo = max(0, j.landing - 5)
+        j.flickers = int((np.diff(on[lo:lo + int(fps)].astype(int), axis=0) != 0).sum())
+        j.score = j.flight_s - (0.0 if j.stable_landing else 0.15) - 0.03 * j.flickers
+    return out
 
 
-def recovery_frame(g: Gem, jump: JumpInfo, max_s=3.0, hold_s=0.1, v_thr=0.3):
-    """First frame after landing where the hips are back at standing height and vertically still, feet down."""
+def best_jump(jumps):
+    """The jump to keep: highest score (airtime, penalised for an unstable landing / contact flicker); ties by hip rise."""
+    if not jumps:
+        return JumpInfo()
+    return max(jumps, key=lambda j: (round(j.score, 3), j.hips_rise_m))
+
+
+def detect_jump(g: Gem, min_flight_s=MIN_FLIGHT_S, min_crouch_m=0.03) -> JumpInfo:
+    """The best jump of the take (see `detect_jumps`), or JumpInfo(found=False)."""
+    return best_jump(detect_jumps(g, min_flight_s, MIN_CLEARANCE_M, min_crouch_m))
+
+
+def recovery_frame(g: Gem, jump: JumpInfo, max_s=3.0, hold_s=0.1, v_thr=0.3, limit=None):
+    """First frame after landing where the hips are back at standing height and vertically still, feet down.
+    `limit`: do not look past this frame (e.g. the next jump's crouch onset)."""
     fps = g.fps
     on, _ = foot_contacts(g.contact)
     hips = _smooth(g.J[:, 0, 1], fps)
     vy = np.gradient(hips) * fps
     a = jump.landing
-    i_min = a + int(np.argmin(hips[a:min(g.T, a + int(1.0 * fps))]))
+    end = min(g.T, a + int(max_s * fps))
+    if limit is not None:
+        end = min(end, int(limit))
+    if end <= a + 1:
+        return None
+    i_min = a + int(np.argmin(hips[a:min(end, a + int(1.0 * fps))]))
     hold = max(1, int(hold_s * fps))
     ok = on.all(1) & (hips >= jump.stand_height_m - 0.05) & (np.abs(vy) < v_thr)
-    for i in range(i_min, min(g.T - hold + 1, a + int(max_s * fps))):
+    for i in range(i_min, min(g.T - hold + 1, end - hold + 1)):
         if ok[i:i + hold].all():
             return int(i)
     return None
@@ -146,30 +180,80 @@ def walk_onset(g: Gem, start, speed=0.45, hold_s=0.2):
     return None
 
 
-def action_window(g: Gem, jump: JumpInfo, pad_s=0.5):
+def action_window(g: Gem, jump: JumpInfo, pad_s=0.5, jumps=None):
     """(start, end_exclusive, details) for the jump action, or None when no jump was found.
 
     start = crouch onset - pad; end = stable standing after landing + pad, cut short where the
-    performer starts walking away.
+    performer starts walking away. With several jumps in the take (`jumps`, from `detect_jumps`), the window is
+    limited to the kept one: it starts no earlier than the standing pose after the previous jump (or the midpoint
+    between the previous landing and this crouch when there is no standing) and ends no later than the next
+    jump's crouch onset.
     """
     if not jump.found:
         return None
     fps = g.fps
     pad = int(round(pad_s * fps))
     details = {}
-    rec = recovery_frame(g, jump)
+    prev = nxt = None
+    for j in jumps or []:
+        if j.landing <= jump.takeoff:
+            prev = j
+        elif j.takeoff >= jump.landing and nxt is None:
+            nxt = j
+    limit = nxt.crouch_onset if nxt is not None else None
+    rec = recovery_frame(g, jump, limit=limit)
     if rec is None:
-        rec = min(g.T - 1, jump.landing + int(1.0 * fps))
-        details["recovery"] = "stable standing height not found after landing; used landing + 1 s"
-    end = rec + pad
-    w = walk_onset(g, rec)
-    if w is not None and w < end:
-        end = max(rec + int(0.2 * fps), w)
-        details["end_cut_by_walk_out"] = True
+        if limit is not None:
+            end = int(limit)
+            details["end_cut_by_next_jump"] = True
+        else:
+            rec = min(g.T - 1, jump.landing + int(1.0 * fps))
+            details["recovery"] = "stable standing height not found after landing; used landing + 1 s"
+            end = rec + pad
+    else:
+        end = rec + pad
+        if limit is not None and end > limit:
+            end = int(limit)
+            details["end_cut_by_next_jump"] = True
+        w = walk_onset(g, rec)
+        if w is not None and w < end:
+            end = max(rec + int(0.2 * fps), w)
+            details["end_cut_by_walk_out"] = True
+        details["recovery_frame"] = int(rec)
     a = max(0, jump.crouch_onset - pad)
+    if prev is not None:
+        prev_rec = recovery_frame(g, prev, limit=jump.crouch_onset)
+        bound = prev_rec if prev_rec is not None else (prev.landing + jump.crouch_onset) // 2
+        if bound > a:
+            a = int(min(bound, jump.crouch_onset))
+            details["start_after_previous_jump"] = True
     b = min(g.T, end + 1)
-    details["recovery_frame"] = int(rec)
     return int(a), int(b), details
+
+
+def idle_trim(g: Gem, pad_s=0.3, frac=0.25, min_peak=0.2, min_len_s=1.0):
+    """(start, end_exclusive, details) for a generic action: cut only the idle (low-motion) frames at the start and
+    end. Motion = mean speed (m/s) of hips, head, hands, feet, shins and forearms, smoothed over ~0.4 s. The tracker
+    jitters even when the performer stands still, so "idle" is relative: below noise floor (10th percentile) +
+    `frac` x (95th percentile - floor). Nothing is cut when the whole clip is quiet (peak < `min_peak`)."""
+    fps, T = g.fps, g.T
+    sel = [g.idx(n) for n in ("Hips", "Head", "LeftHand", "RightHand", "LeftFoot", "RightFoot", "LeftShin", "RightShin",
+                              "LeftForeArm", "RightForeArm")]
+    sp = np.linalg.norm(np.gradient(g.J[:, sel], axis=0), axis=2).mean(1) * fps
+    sp = uniform_filter1d(sp, max(3, int(0.4 * fps)), mode="nearest")
+    floor, peak = np.percentile(sp, [10, 95])
+    thr = float(floor + frac * (peak - floor))
+    details = {"mode": "idle_trim", "motion_threshold_mps": round(thr, 3)}
+    active = np.flatnonzero(sp > thr)
+    if peak < min_peak or len(active) == 0:
+        details["note"] = "no clear motion; whole clip kept"
+        return 0, T, details
+    pad = int(round(pad_s * fps))
+    a, b = max(0, int(active[0]) - pad), min(T, int(active[-1]) + 1 + pad)
+    if b - a < int(min_len_s * fps):
+        c, h = (a + b) // 2, int(min_len_s * fps) // 2
+        a, b = max(0, c - h), min(T, c + h)
+    return a, b, details
 
 
 def facing_xz(g: Gem):

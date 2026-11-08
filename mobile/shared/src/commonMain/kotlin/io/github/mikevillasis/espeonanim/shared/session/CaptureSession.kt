@@ -25,14 +25,18 @@ data class SessionConfig(
     /** ... then turn slowly through 360 degrees in place. */
     val turnMs: Long = 10_000,
     /**
-     * Fallback limit: action takes stop by themselves after this long. Normally the jump
-     * detector ([JumpStopDetector]) stops the take earlier, after the landing.
+     * Fallback limit: action takes stop by themselves after this long. Normally, for the jump action, the jump
+     * detector ([JumpStopDetector]) stops the take earlier, after the landing; other actions stop when the user taps Stop.
      */
     val maxTakeMs: Long = 12_000,
     /** The app recommends at least this many kept takes. */
     val recommendedKeptTakes: Int = 2,
-    val action: String = "jump",
+    val action: String = ACTION_JUMP,
 )
+
+/** Manifest `action` values (docs/formats.md section 1). */
+const val ACTION_JUMP = "jump"
+const val ACTION_OTHER = "other"
 
 enum class Step { Setup, Calibration, Takes, Package }
 enum class CalibrationPhase { Ready, Countdown, APose, Turn, Finalizing, Review }
@@ -75,7 +79,7 @@ sealed interface SessionEffect {
 data class SessionState(
     val step: Step = Step.Setup,
     val performerHeightCm: Int? = null,
-    val action: String = "jump",
+    val action: String = ACTION_JUMP,
     val calibrationPhase: CalibrationPhase = CalibrationPhase.Ready,
     /** Accepted calibration clip. */
     val calibration: Take? = null,
@@ -131,6 +135,11 @@ class CaptureSession(private val config: SessionConfig = SessionConfig()) {
     }
 
     // ---- Setup ----
+
+    /** Choose what the performer will do ([ACTION_JUMP] or [ACTION_OTHER]); only possible on the Setup step. */
+    fun setAction(action: String) = update {
+        if (it.step == Step.Setup && action in setOf(ACTION_JUMP, ACTION_OTHER)) it.copy(action = action) else it
+    }
 
     fun setPerformerHeight(cm: Int?) = update { it.copy(performerHeightCm = cm?.takeIf { h -> h in 50..250 }) }
 
@@ -372,7 +381,7 @@ class CaptureSession(private val config: SessionConfig = SessionConfig()) {
             (s.step == Step.Takes && s.takePhase == TakePhase.Finalizing)
         if (busy) return emptyList()
         val paths = (listOfNotNull(s.calibration, s.pending) + s.takes).flatMap { it.clip.filePaths() }.distinct()
-        _state.value = SessionState(action = config.action, recommendedKeptTakes = config.recommendedKeptTakes)
+        _state.value = SessionState(action = s.action, recommendedKeptTakes = config.recommendedKeptTakes)
         phaseStartMs = 0L
         takeCounter = 0
         lastBeepSecond = -1

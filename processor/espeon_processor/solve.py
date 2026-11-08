@@ -63,12 +63,15 @@ def _cross(m, i0, i1):
     return float(i1)
 
 
-def ballistic_correct(pel_z, prob_max, flight, fps, g=G_CM, min_flight_s=0.15, max_air_s=1.0, max_apex_cm=80.0, blend_sigma=2.0):
+def ballistic_correct(pel_z, prob_max, flight, fps, g=G_CM, min_flight_s=0.25, max_air_s=1.0, max_apex_cm=80.0, blend_sigma=2.0,
+                      min_clearance_cm=4.0):
     """Replace the vertical pelvis path in each flight phase by a parabola of the measured airtime.
 
     pel_z (F,) cm; prob_max (F,) max foot contact probability; flight (F,) bool (both feet off).
     Takeoff/landing are refined to sub-frame times from the 0.5 crossing of prob_max; the parabola passes through
     the data's heights at those times; the correction is Gaussian-blended so vertical velocity stays continuous.
+    A flight needs an airtime of at least `min_flight_s` and a measured pelvis rise of `min_clearance_cm` over the
+    takeoff-landing chord, so a foot-contact flicker during a crouch is not turned into a jump.
     Returns (delta (F,) to add to pel_z, [info dicts]).
     """
     F = len(pel_z)
@@ -86,9 +89,11 @@ def ballistic_correct(pel_z, prob_max, flight, fps, g=G_CM, min_flight_s=0.15, m
         u = (f - t0) / (t1 - t0)
         apex = min(g * T * T / 8.0, max_apex_cm)
         target = z0 + (z1 - z0) * u + 4 * apex * u * (1 - u)
+        orig = float((pel_z[f] - (z0 + (z1 - z0) * u)).max())
+        if orig < min_clearance_cm:
+            continue
         d = np.zeros(F)
         d[f] = target - pel_z[f]
-        orig = float((pel_z[f] - (z0 + (z1 - z0) * u)).max())
         delta += d
         infos.append({"takeoff_s": t0 / fps, "landing_s": t1 / fps, "airtime_s": T, "apex_original_cm": orig,
                       "apex_ballistic_cm": apex, "capped": bool(g * T * T / 8.0 > max_apex_cm)})
@@ -141,7 +146,8 @@ def support_center(ankle_xy, on, sigma=2.0, min_len=3):
 
 
 def solve(gem: Gem, window, rig: Rig, scale: float, out_fps=60.0, rt: Retargeter | None = None,
-          smooth=True, lock=True, ballistic=True) -> Solved:
+          smooth=True, lock=True, ballistic=True, jump_span=None) -> Solved:
+    """`jump_span`: (takeoff, landing) in source frames; when given, only flights overlapping it get the ballistic correction."""
     a, b = window
     g = gem.slice(a, b)
     fps, F = g.fps, g.T
@@ -194,7 +200,13 @@ def solve(gem: Gem, window, rig: Rig, scale: float, out_fps=60.0, rt: Retargeter
     # --- ballistic flight correction (GEM underestimates jump height) ---------------------------
     stats["ballistic"] = []
     if ballistic and flight.any():
-        delta, infos = ballistic_correct(pel_w[:, 2], prob.max(1), flight, fps)
+        bflight = flight
+        if jump_span is not None:
+            bflight = np.zeros(F, bool)
+            for s0, e0 in runs(flight):
+                if s0 + a < jump_span[1] and e0 + a > jump_span[0]:
+                    bflight[s0:e0] = True
+        delta, infos = ballistic_correct(pel_w[:, 2], prob.max(1), bflight, fps)
         pel_w[:, 2] += delta
         h = h + delta[:, None]
         for i in infos:

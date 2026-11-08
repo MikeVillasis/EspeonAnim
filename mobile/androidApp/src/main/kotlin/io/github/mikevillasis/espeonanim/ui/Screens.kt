@@ -51,6 +51,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.mikevillasis.espeonanim.CaptureViewModel
+import io.github.mikevillasis.espeonanim.shared.session.ACTION_JUMP
+import io.github.mikevillasis.espeonanim.shared.session.ACTION_OTHER
 import io.github.mikevillasis.espeonanim.shared.session.JumpPhase
 import io.github.mikevillasis.espeonanim.ExportState
 import io.github.mikevillasis.espeonanim.shared.manifest.TakeRole
@@ -82,12 +84,15 @@ fun SetupScreen(vm: CaptureViewModel, state: SessionState, cameraGranted: Boolea
     ScreenScaffold("EspeonAnim") {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(
-                "Record yourself jumping. The app checks each take, then makes one package for your PC.",
+                "Record yourself jumping or moving. The app checks each take, then makes one package for your PC.",
                 style = MaterialTheme.typography.bodyLarge,
             )
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Action", style = MaterialTheme.typography.titleMedium)
-                FilterChip(selected = true, onClick = {}, label = { Text("Jump", fontSize = 18.sp) })
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    FilterChip(selected = state.action == ACTION_JUMP, onClick = { vm.setAction(ACTION_JUMP) }, label = { Text("Jump", fontSize = 18.sp) })
+                    FilterChip(selected = state.action == ACTION_OTHER, onClick = { vm.setAction(ACTION_OTHER) }, label = { Text("Other movement", fontSize = 18.sp) })
+                }
             }
             OutlinedTextField(
                 value = height,
@@ -209,6 +214,7 @@ private fun ErrorLine(msg: String, onDismiss: () -> Unit) {
 @Composable
 fun TakesScreen(vm: CaptureViewModel, state: SessionState) {
     val jumpPhase by vm.jumpPhase.collectAsStateWithLifecycle()
+    val isJump = state.action == ACTION_JUMP
     when (state.takePhase) {
         TakePhase.List -> TakeList(vm, state)
         TakePhase.Review -> state.pending?.let {
@@ -228,10 +234,11 @@ fun TakesScreen(vm: CaptureViewModel, state: SessionState) {
             allowFlip = false,
             center = {
                 when (state.takePhase) {
-                    TakePhase.Countdown -> BigNumber(seconds(state.remainingMs), "Get ready to jump")
+                    TakePhase.Countdown -> BigNumber(seconds(state.remainingMs), if (isJump) "Get ready to jump" else "Get ready to move")
                     TakePhase.Recording -> BigNumber(
                         seconds(state.remainingMs),
-                        if (jumpPhase == JumpPhase.Landed || jumpPhase == JumpPhase.Done) "Landed - hold still"
+                        if (!isJump) "Move when ready - tap Stop when done"
+                        else if (jumpPhase == JumpPhase.Landed || jumpPhase == JumpPhase.Done) "Landed - hold still"
                         else "Jump when ready - recording stops after you land",
                     )
                     TakePhase.Finalizing -> CircularProgressIndicator(color = Color.White)
@@ -258,7 +265,8 @@ private fun TakeList(vm: CaptureViewModel, state: SessionState) {
     ScreenScaffold("Takes") {
         Column(Modifier.fillMaxSize()) {
             Text(
-                "Calibration clip saved. Now record your jumps: a 5 second countdown with beeps, then recording stops by itself after you land (at most 12 seconds).",
+                if (state.action == ACTION_JUMP) "Calibration clip saved. Now record your jumps: a 5 second countdown with beeps, then recording stops by itself after you land (at most 12 seconds)."
+                else "Calibration clip saved. Now record your movement: a 5 second countdown with beeps, then tap Stop when you are done (it stops by itself after 12 seconds).",
                 style = MaterialTheme.typography.bodyLarge,
             )
             Spacer(Modifier.height(12.dp))
