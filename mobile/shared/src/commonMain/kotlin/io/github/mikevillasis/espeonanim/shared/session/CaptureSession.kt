@@ -18,13 +18,17 @@ import kotlinx.coroutines.flow.asStateFlow
 
 /** Timings and limits of a capture session. */
 data class SessionConfig(
-    val countdownMs: Long = 3_000,
+    /** Countdown before calibration and action takes; long enough to get back into place. */
+    val countdownMs: Long = 5_000,
     /** Calibration: hold an A-pose first ... */
     val aPoseMs: Long = 3_000,
     /** ... then turn slowly through 360 degrees in place. */
     val turnMs: Long = 10_000,
-    /** Action takes stop by themselves after this long. */
-    val maxTakeMs: Long = 8_000,
+    /**
+     * Fallback limit: action takes stop by themselves after this long. Normally the jump
+     * detector ([JumpStopDetector]) stops the take earlier, after the landing.
+     */
+    val maxTakeMs: Long = 12_000,
     /** The app recommends at least this many kept takes. */
     val recommendedKeptTakes: Int = 2,
     val action: String = "jump",
@@ -60,6 +64,9 @@ data class Take(
 sealed interface SessionEffect {
     data class StartRecording(val takeId: String, val role: TakeRole) : SessionEffect
     data object StopRecording : SessionEffect
+
+    /** One countdown second began; [secondsLeft] counts down to 1. The platform plays a beep. */
+    data class CountdownBeep(val secondsLeft: Int) : SessionEffect
 
     /** Recording that was cancelled or rejected; delete its files. */
     data class DeleteFiles(val paths: List<String>) : SessionEffect
@@ -117,6 +124,7 @@ class CaptureSession(private val config: SessionConfig = SessionConfig()) {
 
     private var phaseStartMs = 0L
     private var takeCounter = 0
+    private var lastBeepSecond = -1
 
     private inline fun update(f: (SessionState) -> SessionState) {
         _state.value = f(_state.value)
@@ -138,6 +146,7 @@ class CaptureSession(private val config: SessionConfig = SessionConfig()) {
         val s = _state.value
         if (s.step != Step.Calibration || s.calibrationPhase != CalibrationPhase.Ready) return
         phaseStartMs = nowMs
+        lastBeepSecond = -1
         _state.value = s.copy(
             calibrationPhase = CalibrationPhase.Countdown, remainingMs = config.countdownMs, error = null,
         )
@@ -167,6 +176,7 @@ class CaptureSession(private val config: SessionConfig = SessionConfig()) {
         val s = _state.value
         if (s.step != Step.Takes || s.takePhase != TakePhase.List) return
         phaseStartMs = nowMs
+        lastBeepSecond = -1
         _state.value = s.copy(takePhase = TakePhase.Countdown, remainingMs = config.countdownMs, error = null)
     }
 
@@ -177,6 +187,12 @@ class CaptureSession(private val config: SessionConfig = SessionConfig()) {
         _state.value = s.copy(takePhase = TakePhase.Finalizing, remainingMs = 0)
         return listOf(SessionEffect.StopRecording)
     }
+
+    /**
+     * The jump detector decided the performer has landed and settled. Same as
+     * [stopTakeEarly]: only acts while an action take is recording.
+     */
+    fun onAutoStop(): List<SessionEffect> = stopTakeEarly()
 
     fun keepTake() {
         val s = _state.value
@@ -191,6 +207,7 @@ class CaptureSession(private val config: SessionConfig = SessionConfig()) {
         val p = s.pending ?: return emptyList()
         if (s.step != Step.Takes || s.takePhase != TakePhase.Review) return emptyList()
         phaseStartMs = nowMs
+        lastBeepSecond = -1
         _state.value = s.copy(pending = null, takePhase = TakePhase.Countdown, remainingMs = config.countdownMs)
         return listOf(SessionEffect.DeleteFiles(p.clip.filePaths()))
     }
@@ -289,6 +306,7 @@ class CaptureSession(private val config: SessionConfig = SessionConfig()) {
                         return listOf(SessionEffect.StartRecording(id, TakeRole.Calibration))
                     }
                     _state.value = s.copy(remainingMs = config.countdownMs - elapsed)
+                    return beepFor(config.countdownMs - elapsed)
                 }
                 CalibrationPhase.APose -> {
                     if (elapsed >= config.aPoseMs) {
@@ -318,6 +336,7 @@ class CaptureSession(private val config: SessionConfig = SessionConfig()) {
                         return listOf(SessionEffect.StartRecording(id, TakeRole.Action))
                     }
                     _state.value = s.copy(remainingMs = config.countdownMs - elapsed)
+                    return beepFor(config.countdownMs - elapsed)
                 }
                 TakePhase.Recording -> {
                     if (elapsed >= config.maxTakeMs) {
@@ -330,6 +349,14 @@ class CaptureSession(private val config: SessionConfig = SessionConfig()) {
             }
         }
         return emptyList()
+    }
+
+    /** A [SessionEffect.CountdownBeep] the first time each whole second is shown. */
+    private fun beepFor(remainingMs: Long): List<SessionEffect> {
+        val sec = ((remainingMs + 999) / 1000).toInt()
+        if (sec == lastBeepSecond || sec <= 0) return emptyList()
+        lastBeepSecond = sec
+        return listOf(SessionEffect.CountdownBeep(sec))
     }
 
     // ---- Package ----

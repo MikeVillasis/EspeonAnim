@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.mikevillasis.espeonanim.CaptureViewModel
+import io.github.mikevillasis.espeonanim.shared.session.JumpPhase
 import io.github.mikevillasis.espeonanim.ExportState
 import io.github.mikevillasis.espeonanim.shared.manifest.TakeRole
 import io.github.mikevillasis.espeonanim.shared.manifest.Verdict
@@ -206,6 +207,7 @@ private fun ErrorLine(msg: String, onDismiss: () -> Unit) {
 
 @Composable
 fun TakesScreen(vm: CaptureViewModel, state: SessionState) {
+    val jumpPhase by vm.jumpPhase.collectAsStateWithLifecycle()
     when (state.takePhase) {
         TakePhase.List -> TakeList(vm, state)
         TakePhase.Review -> state.pending?.let {
@@ -226,7 +228,11 @@ fun TakesScreen(vm: CaptureViewModel, state: SessionState) {
             center = {
                 when (state.takePhase) {
                     TakePhase.Countdown -> BigNumber(seconds(state.remainingMs), "Get ready to jump")
-                    TakePhase.Recording -> BigNumber(seconds(state.remainingMs), "Jump now!")
+                    TakePhase.Recording -> BigNumber(
+                        seconds(state.remainingMs),
+                        if (jumpPhase == JumpPhase.Landed || jumpPhase == JumpPhase.Done) "Landed - hold still"
+                        else "Jump when ready - recording stops after you land",
+                    )
                     TakePhase.Finalizing -> CircularProgressIndicator(color = Color.White)
                     else -> Unit
                 }
@@ -251,7 +257,7 @@ private fun TakeList(vm: CaptureViewModel, state: SessionState) {
     ScreenScaffold("Takes") {
         Column(Modifier.fillMaxSize()) {
             Text(
-                "Calibration clip saved. Now record your jumps: a 3 second countdown, then up to 8 seconds.",
+                "Calibration clip saved. Now record your jumps: a 5 second countdown with beeps, then recording stops by itself after you land (at most 12 seconds).",
                 style = MaterialTheme.typography.bodyLarge,
             )
             Spacer(Modifier.height(12.dp))

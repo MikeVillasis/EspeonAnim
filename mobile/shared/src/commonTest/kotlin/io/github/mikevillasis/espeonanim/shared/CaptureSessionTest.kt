@@ -8,6 +8,7 @@ import io.github.mikevillasis.espeonanim.shared.manifest.Verdict
 import io.github.mikevillasis.espeonanim.shared.session.CalibrationPhase
 import io.github.mikevillasis.espeonanim.shared.session.CaptureSession
 import io.github.mikevillasis.espeonanim.shared.session.RecordedClip
+import io.github.mikevillasis.espeonanim.shared.session.SessionConfig
 import io.github.mikevillasis.espeonanim.shared.session.SessionEffect
 import io.github.mikevillasis.espeonanim.shared.session.Step
 import io.github.mikevillasis.espeonanim.shared.session.TakePhase
@@ -30,29 +31,29 @@ class CaptureSessionTest {
         continueFromSetup()
         startCalibration(0)
         assertEquals(CalibrationPhase.Countdown, state.value.calibrationPhase)
-        val start = tick(3_000)
+        val start = tick(5_000)
         assertTrue(start.single() is SessionEffect.StartRecording)
         assertEquals(CalibrationPhase.APose, state.value.calibrationPhase)
-        tick(6_000)
+        tick(8_000)
         assertEquals(CalibrationPhase.Turn, state.value.calibrationPhase)
-        val stop = tick(16_000)
+        val stop = tick(18_000)
         assertEquals(listOf(SessionEffect.StopRecording), stop)
         onRecordingFinished(clip("calibration", null))
         assertEquals(CalibrationPhase.Review, state.value.calibrationPhase)
         acceptCalibration()
         assertEquals(Step.Takes, state.value.step)
-        return 16_000
+        return 18_000
     }
 
     private fun CaptureSession.recordTake(from: Long, verdict: Verdict, name: String): Long {
         startTake(from)
         assertEquals(TakePhase.Countdown, state.value.takePhase)
-        val s = tick(from + 3_000)
+        val s = tick(from + 5_000)
         assertTrue((s.single() as SessionEffect.StartRecording).role == TakeRole.Action)
-        assertEquals(listOf(SessionEffect.StopRecording), tick(from + 3_000 + 8_000)) // auto-stop at 8 s
+        assertEquals(listOf(SessionEffect.StopRecording), tick(from + 5_000 + 12_000)) // fallback stop at 12 s
         onRecordingFinished(clip(name, verdict))
         assertEquals(TakePhase.Review, state.value.takePhase)
-        return from + 12_000
+        return from + 18_000
     }
 
     @Test
@@ -112,7 +113,7 @@ class CaptureSessionTest {
         assertTrue(s.cancel().isEmpty())
         assertEquals(TakePhase.List, s.state.value.takePhase)
         s.startTake(t)
-        s.tick(t + 3_000)
+        s.tick(t + 5_000)
         assertEquals(listOf(SessionEffect.StopRecording), s.cancel())
         // The clip arriving after cancel is deleted, not reviewed.
         val fx = s.onRecordingFinished(clip("late"))
@@ -126,7 +127,7 @@ class CaptureSessionTest {
         s.continueFromSetup()
         s.startCalibration(1_000)
         s.tick(2_000)
-        assertEquals(2_000, s.state.value.remainingMs)
+        assertEquals(4_000, s.state.value.remainingMs)
     }
 
     @Test
@@ -135,7 +136,45 @@ class CaptureSessionTest {
         var t = s.doCalibration()
         t = s.recordTake(t, Verdict.Ok, "a1")
         s.retakeTake(t)
-        s.tick(t + 3_000)
+        s.tick(t + 5_000)
         assertEquals("action_02", s.state.value.recordingId)
+    }
+
+    @Test
+    fun defaultsAreFiveSecondCountdownAndTwelveSecondFallback() {
+        val c = SessionConfig()
+        assertEquals(5_000, c.countdownMs)
+        assertEquals(12_000, c.maxTakeMs)
+    }
+
+    @Test
+    fun countdownBeepsOncePerSecond() {
+        val s = CaptureSession()
+        s.continueFromSetup()
+        s.startCalibration(0)
+        val beeps = ArrayList<Int>()
+        var t = 0L
+        while (t < 5_000) {
+            s.tick(t).filterIsInstance<SessionEffect.CountdownBeep>().forEach { beeps += it.secondsLeft }
+            t += 50
+        }
+        assertEquals(listOf(5, 4, 3, 2, 1), beeps)
+    }
+
+    @Test
+    fun autoStopOnlyWhileRecording() {
+        val s = CaptureSession()
+        val t = s.doCalibration()
+        assertTrue(s.onAutoStop().isEmpty()) // list
+        s.startTake(t)
+        assertTrue(s.onAutoStop().isEmpty()) // countdown
+        s.tick(t + 5_000)
+        assertEquals(TakePhase.Recording, s.state.value.takePhase)
+        assertEquals(listOf(SessionEffect.StopRecording), s.onAutoStop())
+        assertEquals(TakePhase.Finalizing, s.state.value.takePhase)
+        assertTrue(s.onAutoStop().isEmpty()) // already stopping
+        assertTrue(s.tick(t + 5_000 + 12_000).isEmpty()) // fallback does not stop twice
+        s.onRecordingFinished(clip("auto"))
+        assertEquals(TakePhase.Review, s.state.value.takePhase)
     }
 }

@@ -24,6 +24,10 @@ import io.github.mikevillasis.espeonanim.shared.manifest.DeviceInfo
 import io.github.mikevillasis.espeonanim.shared.manifest.TakeRole
 import io.github.mikevillasis.espeonanim.shared.packaging.AndroidPackageWriter
 import io.github.mikevillasis.espeonanim.shared.session.CaptureSession
+import io.github.mikevillasis.espeonanim.shared.session.JumpPhase
+import io.github.mikevillasis.espeonanim.shared.session.JumpStopDetector
+import io.github.mikevillasis.espeonanim.shared.session.TakePhase
+import io.github.mikevillasis.espeonanim.shared.session.Step
 import io.github.mikevillasis.espeonanim.shared.session.RecordedClip
 import io.github.mikevillasis.espeonanim.shared.session.SessionEffect
 import io.github.mikevillasis.espeonanim.shared.session.SessionState
@@ -59,6 +63,12 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
 
     private val engine = GuidanceEngine(GuidanceConfig())
     private val engineLock = Any()
+    private val cues = CuePlayer()
+    private val jumpDetector = JumpStopDetector()
+    private var autoStopSent = false
+    private val _jumpPhase = MutableStateFlow(JumpPhase.Baseline)
+    /** Phase of the jump detector during an action take; the UI shows "Landed" from it. */
+    val jumpPhase: StateFlow<JumpPhase> = _jumpPhase.asStateFlow()
     private val imu = ImuRecorder(app)
     private val controller = CameraController(app)
     private var analyzer: PoseAnalyzer? = null
@@ -176,13 +186,29 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
         val status = synchronized(engineLock) { engine.update(input) }
         _live.value = status
         _overlay.value = OverlayState(f.landmarks, f.uprightWidth.toFloat() / f.uprightHeight, _front.value)
+        feedJumpDetector(f)
+    }
+
+    /** Stops a jump take by itself once the performer has landed and settled. */
+    private fun feedJumpDetector(f: PoseFrame) {
+        val s = state.value
+        if (s.step != Step.Takes || s.takePhase != TakePhase.Recording || s.action != "jump") return
+        val stop = synchronized(engineLock) {
+            if (autoStopSent) return
+            val r = jumpDetector.update(f.timestampMs, f.landmarks)
+            _jumpPhase.value = jumpDetector.phase
+            if (r) autoStopSent = true
+            r
+        }
+        if (stop) viewModelScope.launch { apply(session.onAutoStop()) }
     }
 
     // ---- Recording ----
     private fun apply(effects: List<SessionEffect>) {
         for (e in effects) when (e) {
             is SessionEffect.StartRecording -> startRecording(e.takeId, e.role)
-            SessionEffect.StopRecording -> controller.stopRecording()
+            SessionEffect.StopRecording -> { cues.recordingStopped(); controller.stopRecording() }
+            is SessionEffect.CountdownBeep -> cues.countdown()
             is SessionEffect.DeleteFiles -> viewModelScope.launch(Dispatchers.IO) {
                 e.paths.forEach { runCatching { File(it).delete() } }
             }
@@ -194,7 +220,11 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
         val imuFile = File(captureDir, "$takeId.imu.csv")
         var startNs = 0L
         imu.beginBuffering()
-        if (role == TakeRole.Action) synchronized(engineLock) { engine.startTake() }
+        if (role == TakeRole.Action) synchronized(engineLock) {
+            engine.startTake()
+            jumpDetector.reset(); autoStopSent = false; _jumpPhase.value = JumpPhase.Baseline
+        }
+        cues.recordingStarted()
         try {
             controller.startRecording(video) { ev ->
                 when (ev) {
@@ -311,6 +341,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         link.close()
         controller.shutdown()
+        cues.release()
         imu.stop()
         analyzer?.close()
     }
