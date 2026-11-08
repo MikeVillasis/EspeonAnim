@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+        Cleartext HTTP is allowed because the Unreal plugin's receiver speaks plain HTTP on the
+        PC's LAN address (docs/formats.md section 5); a home PC has no certificate a phone could
+        verify. Android cannot express "private IP ranges only" here (domain-config matches host
+        names, not CIDR ranges, and the PC's LAN IP changes), so the restriction lives in the app:
+        PairingInfo only accepts private/link-local/loopback IPv4 addresses and local host names.
+        Every request except ping is protected by the 128-bit pairing token. The app contacts no
+        other servers.
+    -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

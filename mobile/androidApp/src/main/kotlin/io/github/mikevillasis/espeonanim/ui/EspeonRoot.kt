@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
@@ -47,10 +48,17 @@ fun EspeonRoot(vm: CaptureViewModel = viewModel()) {
         }
     }
 
+    var scanning by rememberSaveable { mutableStateOf(false) }
+    BackHandler(enabled = scanning) { scanning = false }
+
     EspeonTheme {
+        if (scanning) {
+            PairingScreen(vm, onClose = { scanning = false })
+            return@EspeonTheme
+        }
         when (state.step) {
             Step.Setup -> SetupScreen(
-                vm, state, cameraGranted = granted, denied = denied,
+                vm, state, cameraGranted = granted, denied = denied, onPair = { scanning = true },
                 onContinue = { if (granted) vm.continueFromSetup() else launcher.launch(Manifest.permission.CAMERA) },
                 onOpenSettings = {
                     ctx.startActivity(
@@ -61,7 +69,7 @@ fun EspeonRoot(vm: CaptureViewModel = viewModel()) {
             )
             Step.Calibration -> CalibrationScreen(vm, state)
             Step.Takes -> TakesScreen(vm, state)
-            Step.Package -> ExportScreen(vm, state)
+            Step.Package -> ExportScreen(vm, state, onPair = { scanning = true })
         }
     }
 }

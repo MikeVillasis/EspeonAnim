@@ -27,6 +27,7 @@ import io.github.mikevillasis.espeonanim.shared.session.CaptureSession
 import io.github.mikevillasis.espeonanim.shared.session.RecordedClip
 import io.github.mikevillasis.espeonanim.shared.session.SessionEffect
 import io.github.mikevillasis.espeonanim.shared.session.SessionState
+import io.github.mikevillasis.espeonanim.transport.PcLink
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -77,6 +78,21 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
 
     private val captureDir = File(app.filesDir, "captures")
 
+    // ---- Wi-Fi transfer ----
+    private val link = PcLink(app, viewModelScope)
+    val pairing = link.pairing
+    val pairUi = link.pairUi
+    val pcOnline = link.online
+    val sendState = link.send
+    fun startScanning() = link.startScanning()
+    fun onQrText(text: String) = link.onQrText(text)
+    fun forgetPairing() = link.forgetPairing()
+    fun refreshPcOnline() = link.refreshOnline()
+    fun sendToPc() { (_export.value as? ExportState.Ready)?.let { link.send(it.file) } }
+    fun cancelSend() = link.cancelSend()
+    fun resetSend() = link.resetSend()
+
+
     init {
         captureDir.deleteRecursively() // leftovers from a previous process; session state is in memory only
         captureDir.mkdirs()
@@ -105,8 +121,8 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     fun deleteTake(id: String) = apply(session.deleteTake(id))
     fun reviewTake(id: String) = session.reviewTake(id)
     fun clearError() = session.clearError()
-    fun goToPackage() { if (session.goToPackage()) { _export.value = ExportState.Idle; buildPackage() } }
-    fun backToTakes() = session.backToTakes()
+    fun goToPackage() { if (session.goToPackage()) { link.resetSend(); _export.value = ExportState.Idle; buildPackage() } }
+    fun backToTakes() { link.resetSend(); session.backToTakes() }
 
     fun toggleFacing() {
         if (!state.value.capturing) _front.value = !_front.value
@@ -288,6 +304,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     fun retryExport() = buildPackage()
 
     override fun onCleared() {
+        link.close()
         controller.shutdown()
         imu.stop()
         analyzer?.close()

@@ -145,3 +145,10 @@ The plugin (or a user) runs the processor as a separate process:
 - Progress: one JSON object per line on stdout, e.g. `{"event":"progress","stage":"reconstruct","progress":0.42,"message":"Reconstructing 3D motion"}`; finishes with `{"event":"done","motion":"<path>","report":"<path>"}` or `{"event":"error","message":"..."}`. Other output goes to stderr.
 - Exit code 0 on success, non-zero on failure.
 - `python -m espeon_processor doctor` checks the environment (GPU, weights present) and prints a JSON summary.
+
+### §5 details (as implemented)
+
+- `warnings` entries are objects `{"code","message","suggestion"}`; `quality` is `""` until the job is `done`.
+- Errors return `{"error":"..."}` with `400` (empty/bad body), `401` (token), `404` (unknown job), `413` (> 1 GiB) or `500`.
+- Processing takes minutes (≈1 min per take on an RTX 5070), so clients poll status with no overall timeout shorter than ~15 min.
+- The phone accepts only private, link-local or loopback IPv4 addresses and local hostnames (`*.local`, `*.lan`, …) from a pairing code.

@@ -99,4 +99,6 @@ dependencies {
     implementation(libs.camerax.view)
 
     implementation(libs.mediapipe.tasks.vision)
+    implementation(libs.zxing.core)
+    implementation(libs.ktor.client.core)
 }

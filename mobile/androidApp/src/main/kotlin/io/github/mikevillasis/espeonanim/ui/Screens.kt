@@ -74,7 +74,8 @@ private fun ScreenScaffold(title: String, content: @Composable () -> Unit) {
 // ---------------------------------------------------------------- Setup
 
 @Composable
-fun SetupScreen(vm: CaptureViewModel, state: SessionState, cameraGranted: Boolean, denied: Boolean, onContinue: () -> Unit, onOpenSettings: () -> Unit) {
+fun SetupScreen(vm: CaptureViewModel, state: SessionState, cameraGranted: Boolean, denied: Boolean, onPair: () -> Unit, onContinue: () -> Unit, onOpenSettings: () -> Unit) {
+    val pairing by vm.pairing.collectAsStateWithLifecycle()
     var height by rememberSaveable { mutableStateOf(state.performerHeightCm?.toString() ?: "") }
     ScreenScaffold("EspeonAnim") {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -118,6 +119,12 @@ fun SetupScreen(vm: CaptureViewModel, state: SessionState, cameraGranted: Boolea
             }
             Button(onClick = onContinue, modifier = Modifier.fillMaxWidth().height(64.dp)) {
                 Text(if (cameraGranted) "Continue" else "Allow camera and continue", fontSize = 20.sp)
+            }
+            OutlinedButton(onClick = onPair, modifier = Modifier.fillMaxWidth().height(56.dp)) {
+                Text(
+                    pairing?.let { "Paired with ${it.pcName} - pair again" } ?: "Pair with PC (scan QR code)",
+                    fontSize = 17.sp, textAlign = TextAlign.Center,
+                )
             }
         }
     }
@@ -377,7 +384,7 @@ private fun VideoPlayer(path: String, modifier: Modifier) {
 // ---------------------------------------------------------------- Export
 
 @Composable
-fun ExportScreen(vm: CaptureViewModel, state: SessionState) {
+fun ExportScreen(vm: CaptureViewModel, state: SessionState, onPair: () -> Unit) {
     val ctx = LocalContext.current
     val export by vm.export.collectAsStateWithLifecycle()
     ScreenScaffold("Send to your PC") {
@@ -418,10 +425,7 @@ fun ExportScreen(vm: CaptureViewModel, state: SessionState) {
                     ) { Text(if (e.savedTo == null) "Save to Downloads" else "Saved", fontSize = 20.sp) }
                     e.savedTo?.let { Text("Saved to $it", style = MaterialTheme.typography.bodyLarge, color = OkGreen) }
                     e.note?.let { Text(it, color = BadRed) }
-                    // TODO(PcTransport): enable once the Wi-Fi transport and QR pairing exist (build order step 5).
-                    Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth().height(64.dp)) {
-                        Text("Send to PC (Wi-Fi) - coming soon", fontSize = 18.sp, textAlign = TextAlign.Center)
-                    }
+                    SendToPcSection(vm, onPair)
                 }
             }
             TextButton(onClick = vm::backToTakes) { Text("Back to takes") }
