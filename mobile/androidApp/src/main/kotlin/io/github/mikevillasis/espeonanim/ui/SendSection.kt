@@ -114,6 +114,9 @@ fun SendToPcSection(vm: CaptureViewModel, onPair: () -> Unit, standalone: Boolea
             is SendState.Done -> {
                 Text("Done - the animation is in Unreal", color = OkGreen, style = MaterialTheme.typography.titleLarge)
                 OutcomeDetails(s.status.quality, s.status.warnings)
+                if (!standalone) {
+                    StartOverButton(vm, "Record another performer")
+                }
                 OutlinedButton(onClick = vm::resetSend, modifier = Modifier.fillMaxWidth()) { Text("OK") }
             }
             is SendState.Failed -> {

@@ -87,6 +87,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     private val _fps = MutableStateFlow(0)
     val fps: StateFlow<Int> = _fps.asStateFlow()
 
+    @Volatile private var exportGen = 0
     private val captureDir = File(app.filesDir, "captures")
 
     // ---- Wi-Fi transfer ----
@@ -135,6 +136,27 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     fun clearError() = session.clearError()
     fun goToPackage() { if (session.goToPackage()) { resetSend(); _export.value = ExportState.Idle; buildPackage() } }
     fun backToTakes() { resetSend(); session.backToTakes() }
+
+    /**
+     * New performer: drops calibration, takes and height (clip files are deleted) and returns to
+     * Setup. Does nothing while capturing. Pairing is kept. An in-flight send is not cancelled
+     * (the foreground service keeps streaming its package) and built packages are not deleted
+     * (the 24 h prune handles them).
+     */
+    fun startOver() {
+        apply(session.startOver())
+        if (state.value.step != Step.Setup) return // refused: still capturing
+        exportGen++
+        _export.value = ExportState.Idle
+        resetSend() // no-op while a send is active
+        synchronized(engineLock) {
+            engine.reset()
+            jumpDetector.reset(); autoStopSent = false
+        }
+        _jumpPhase.value = JumpPhase.Baseline
+        _live.value = LiveStatus()
+        _overlay.value = null
+    }
 
     fun toggleFacing() {
         if (!state.value.capturing) _front.value = !_front.value
@@ -295,6 +317,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- Export ----
     private fun buildPackage() {
+        val gen = exportGen
         _export.value = ExportState.Building
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -316,9 +339,9 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
                 dir.listFiles()?.filter { it.lastModified() < cutoff }?.forEach { it.delete() }
                 val out = File(dir, "EspeonAnim_$stamp.espeon")
                 AndroidPackageWriter().write(plan, out.absolutePath)
-                _export.value = ExportState.Ready(out, out.length())
+                if (gen == exportGen) _export.value = ExportState.Ready(out, out.length())
             } catch (t: Throwable) {
-                _export.value = ExportState.Failed(t.message ?: "Could not build the package.")
+                if (gen == exportGen) _export.value = ExportState.Failed(t.message ?: "Could not build the package.")
             }
         }
     }
