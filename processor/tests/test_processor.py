@@ -1,4 +1,5 @@
 import json
+import os
 import zipfile
 from pathlib import Path
 
@@ -280,3 +281,95 @@ def test_root_xy_stays_put_before_takeoff(jump1):
     root = np.array(d["root_translation"])
     take = int((jump.takeoff / 30 - s.debug["window_start_s"]) * 60)
     assert np.ptp(root[:max(take - 3, 2), :2], axis=0).max() < 4.0
+
+
+# ---- framing / camera height (issue #3); numbers mirror the app's GuidanceConfig.kt ----------------------------
+from espeon_processor import framing  # noqa: E402
+from espeon_processor.package import Take  # noqa: E402
+
+RAW = Path(__file__).resolve().parents[2] / "testdata" / "raw"
+PIXEL_PKG = Path(os.environ.get("ESPEON_PIXEL_PKG", ""))
+
+
+def _person(head, feet, hip=None, n=90):
+    """n identical frames of a person from head y to feet y (normalized), 33 landmarks x (x, y, visibility)."""
+    L = np.full((n, 33, 3), 0.5)
+    L[:, :, 2] = 1.0
+    L[:, framing.HEAD, 1] = head
+    L[:, framing.FEET, 1] = feet
+    L[:, framing.HIPS, 1] = hip if hip is not None else (head + feet) / 2
+    return L
+
+
+def test_framing_height_boundaries():
+    # headTop = head - 5% of body height, so a 0.4-wide head/feet span is ~0.42 of the frame
+    for h, far, close in [(0.45, False, False), (0.55, False, False), (0.65, False, False), (0.33, True, False), (0.80, False, True)]:
+        r = framing.analyze(_person(0.5 - h / 2, 0.5 + h / 2), fps=30)
+        assert (r["too_far_fraction"] > 0.9) == far, (h, r)
+        assert (r["too_close_fraction"] > 0.9) == close, (h, r)
+
+
+def test_crouch_does_not_look_too_far():
+    a, b = _person(0.23, 0.77, n=90), _person(0.35, 0.77, n=30)   # 1 s crouch after 3 s standing
+    r = framing.analyze(np.concatenate([a, b, a]), fps=30)
+    assert framing.framing_codes(r) == []
+
+
+def test_camera_height_uses_signed_pitch():
+    g = (0.09, 9.76, 1.03)        # Pixel 10, screen tilted up 6 degrees
+    assert framing.camera_pitch_deg(g, front=True) == pytest.approx(6.0, abs=0.1)
+    assert framing.camera_pitch_deg(g, front=False) == pytest.approx(-6.0, abs=0.1)
+    lm = _person(0.28, 0.81, hip=0.58)
+    vfov = framing.vertical_fov_deg(1253.5, 1920)
+    assert vfov == pytest.approx(74.9, abs=0.2)
+    ok = framing.analyze(lm, 30, framing.camera_pitch_deg(g, True), vfov)
+    assert "camera_high" not in framing.framing_codes(ok) and "camera_low" not in framing.framing_codes(ok)
+    wrong = framing.analyze(lm, 30, framing.camera_pitch_deg(g, False), 50.0)   # old back-camera sign
+    assert "camera_high" in framing.framing_codes(wrong)
+    low = framing.analyze(_person(0.1, 0.8, hip=0.25), 30)
+    assert "camera_low" in framing.framing_codes(low)
+
+
+def test_cropped_frames_are_not_judged():
+    r = framing.analyze(_person(-0.1, 0.9), 30)
+    assert r["cropped_fraction"] > 0.9 and framing.framing_codes(r) == []
+
+
+def _landmarks_from_video(path, step):
+    cv2 = pytest.importorskip("cv2")
+    from espeon_processor.boxes import MODEL, _detect
+    if not MODEL.exists():
+        pytest.skip("pose model missing")
+    cap, frames, i = cv2.VideoCapture(str(path)), [], 0
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    while True:
+        ok, f = cap.read()
+        if not ok:
+            break
+        if i % step == 0:
+            s = 640 / max(f.shape[:2])
+            frames.append(cv2.cvtColor(cv2.resize(f, None, fx=s, fy=s), cv2.COLOR_BGR2RGB))
+        i += 1
+    out = []
+    _detect(frames, fps=fps / step, landmarks_out=out)
+    return np.stack(out), fps / step
+
+
+@pytest.mark.skipif(not (PIXEL_PKG / "manifest.json").exists(), reason="set ESPEON_PIXEL_PKG to the unpacked Pixel 10 package")
+def test_real_pixel_take_has_no_framing_warnings():
+    man = json.loads((PIXEL_PKG / "manifest.json").read_text())
+    t = next(x for x in man["takes"] if x["id"] == "action_02")
+    take = Take(t["id"], "action", PIXEL_PKG / t["file"], info=t)
+    pitch, vfov, have_imu = framing.take_camera_info(take)
+    assert have_imu and pitch == pytest.approx(6.0, abs=1.0)
+    lms, fps = _landmarks_from_video(take.path, 4)
+    r = framing.analyze(lms, fps, pitch, vfov)
+    assert framing.framing_codes(r) == [], r
+    assert 0.40 <= r["standing_height_median"] <= 0.65
+
+
+@pytest.mark.skipif(not (RAW / "Jump1.mp4").exists(), reason="testdata/raw not present")
+def test_real_badly_framed_clip_still_warns():
+    lms, fps = _landmarks_from_video(RAW / "Jump1.mp4", 4)
+    r = framing.analyze(lms, fps)
+    assert r["cropped_fraction"] > 0.1      # head/feet leave the frame: body_cropped fires in the pipeline

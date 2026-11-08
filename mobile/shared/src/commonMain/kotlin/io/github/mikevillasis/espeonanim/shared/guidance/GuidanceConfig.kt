@@ -23,15 +23,24 @@ data class GuidanceConfig(
     /** Feet landmarks with mean visibility below this (with hips visible) are treated as out of frame. */
     val feetVisibilityMin: Float = 0.35f,
     val hipsVisibleMin: Float = 0.5f,
-    val tooFarEnter: Float = 0.50f,
-    val tooFarHold: Float = 0.55f,
-    val tooCloseEnter: Float = 0.90f,
-    val tooCloseHold: Float = 0.87f,
+    // Framing target for a jump: the standing performer fills about 40-65% of the frame height,
+    // which leaves headroom for the jump. Warn only outside 40-70% (a margin over the 65% target).
+    // Measured on a well-framed Pixel 10 jump take: standing 50-60%, max 63%; a crouch drops the
+    // instantaneous value to 37%, hence the standing-height window below.
+    // Same numbers and wording as processor/espeon_processor/framing.py and docs/formats.md section 4.
+    val tooFarEnter: Float = 0.40f,
+    val tooFarHold: Float = 0.43f,
+    val tooCloseEnter: Float = 0.70f,
+    val tooCloseHold: Float = 0.67f,
+    /** Trailing window for the standing height (max) and the camera-height offset (median). */
+    val standingWindowMs: Long = 3000,
 
     // ---- Camera height. Offset between hips and camera axis, in body heights, estimated from
-    // hip position, pitch and field of view. Waist ~ hip level, so ~0.2 body heights (~35 cm) is clearly off.
-    val cameraHeightEnter: Float = 0.22f,
-    val cameraHeightHold: Float = 0.17f,
+    // hip position, gravity pitch (sign depends on front/back camera) and field of view.
+    // Waist ~ hip level; chest height is ~0.17 body heights above that and still fine, so
+    // warn only beyond 0.30 (~50 cm). The Pixel take measured -0.02 to +0.07 (median over the clip).
+    val cameraHeightEnter: Float = 0.30f,
+    val cameraHeightHold: Float = 0.24f,
 
     // ---- Tilt (degrees). Roll is measured from the nearest 90 degrees so landscape is fine.
     val pitchEnterDeg: Float = 12f,

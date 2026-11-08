@@ -67,6 +67,8 @@ data class FrameInput(
     val fps: Float = 0f,
     /** Vertical field of view of the upright frame, degrees (used for camera height). */
     val verticalFovDeg: Float = GuidanceConfig.DEFAULT_VERTICAL_FOV_DEG,
+    /** True for the selfie camera: it looks along +z of the device, the back camera along -z. */
+    val frontCamera: Boolean = false,
 )
 
 data class GuidanceMessage(
@@ -113,10 +115,13 @@ data class TakeSummary(
     val mayGiveBadResults: Boolean get() = verdict == Verdict.Poor
 }
 
-/** Region of the (upright) frame where the performer's whole body should fit: about 60-80% of the height. */
+/**
+ * Region of the (upright) frame where the performer's whole body should fit when standing:
+ * about 40-65% of the height, centered, leaving headroom for a jump.
+ */
 object FrameGuide {
-    const val LEFT = 0.22f
-    const val RIGHT = 0.78f
-    const val TOP = 0.10f
-    const val BOTTOM = 0.90f
+    const val LEFT = 0.30f
+    const val RIGHT = 0.70f
+    const val TOP = 0.20f
+    const val BOTTOM = 0.80f
 }

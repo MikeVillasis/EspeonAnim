@@ -182,6 +182,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
             gyroMagnitude = imu.gyroMagnitude,
             fps = controller.targetFps.toFloat(),
             verticalFovDeg = lens?.verticalFovDeg(portrait) ?: GuidanceConfig.DEFAULT_VERTICAL_FOV_DEG,
+            frontCamera = _front.value,
         )
         val status = synchronized(engineLock) { engine.update(input) }
         _live.value = status

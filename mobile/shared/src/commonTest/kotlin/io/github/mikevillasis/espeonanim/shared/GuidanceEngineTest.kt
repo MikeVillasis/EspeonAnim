@@ -20,7 +20,7 @@ import kotlin.test.assertTrue
 class GuidanceEngineTest {
 
     /** Standing person: head at [headY], feet at [feetY], hips halfway unless [hipY] is given. */
-    private fun person(headY: Float = 0.15f, feetY: Float = 0.85f, hipY: Float? = null, vis: Float = 1f): List<Landmark> {
+    private fun person(headY: Float = 0.20f, feetY: Float = 0.80f, hipY: Float? = null, vis: Float = 1f): List<Landmark> {
         val h = feetY - headY
         val l = MutableList(Lm.COUNT) { Landmark(0.5f, 0.5f, vis) }
         fun set(ids: IntArray, y: Float, x: Float = 0.5f) = ids.forEach { l[it] = Landmark(x, y, vis) }
@@ -45,7 +45,8 @@ class GuidanceEngineTest {
         gravity: Vec3? = level,
         gyro: Float? = 0.01f,
         fps: Float = 60f,
-    ) = FrameInput(t, if (landmarks.isEmpty()) 0 else people, landmarks, luma, contrast, gravity, gyro, fps)
+        front: Boolean = false,
+    ) = FrameInput(t, if (landmarks.isEmpty()) 0 else people, landmarks, luma, contrast, gravity, gyro, fps, frontCamera = front)
 
     /** Feeds [seconds] of frames at 15 per second starting at [from]; returns the end time. */
     private fun GuidanceEngine.feed(from: Long, seconds: Float, make: (Long) -> FrameInput): Long {
@@ -186,7 +187,7 @@ class GuidanceEngineTest {
     fun cameraLowAndHighFromHipPosition() {
         // Hips well above the image centre: the camera is below hip height.
         val low = GuidanceEngine()
-        low.feed(0, 4f) { frame(it, landmarks = person(headY = 0.12f, feetY = 0.80f, hipY = 0.30f)) }
+        low.feed(0, 4f) { frame(it, landmarks = person(headY = 0.12f, feetY = 0.80f, hipY = 0.25f)) }
         assertTrue(low.has(WarningCode.CameraLow), "got ${low.status.active.map { it.code }}")
         val high = GuidanceEngine()
         high.feed(0, 4f) { frame(it, landmarks = person(headY = 0.25f, feetY = 0.95f, hipY = 0.75f)) }
@@ -216,6 +217,61 @@ class GuidanceEngineTest {
         close.feed(0, 3f) { frame(it, landmarks = person(headY = 0.07f, feetY = 0.95f)) }
         assertTrue(close.has(WarningCode.TooClose))
         assertFalse(close.has(WarningCode.BodyCropped))
+    }
+
+    @Test
+    fun framingBoundariesForAJump() {
+        // Standing 45% (head .275 -> feet .725, plus head-top estimate): inside the 40-65% target.
+        for (h in listOf(0.43f, 0.50f, 0.66f)) {
+            val e = GuidanceEngine()
+            e.feed(0, 4f) { frame(it, landmarks = person(headY = 0.5f - h / 2 + 0.03f, feetY = 0.5f + h / 2)) }
+            assertFalse(e.has(WarningCode.TooFar) || e.has(WarningCode.TooClose), "height $h: ${e.status.active.map { it.code }}")
+        }
+        val far = GuidanceEngine()
+        far.feed(0, 4f) { frame(it, landmarks = person(headY = 0.33f, feetY = 0.67f)) } // ~0.36 with head top
+        assertTrue(far.has(WarningCode.TooFar))
+        val close = GuidanceEngine()
+        close.feed(0, 4f) { frame(it, landmarks = person(headY = 0.12f, feetY = 0.88f)) } // ~0.80
+        assertTrue(close.has(WarningCode.TooClose))
+    }
+
+    @Test
+    fun crouchingDoesNotLookTooFar() {
+        // Standing 55% most of the time, 35% in a crouch for 1 s: the standing window keeps it fine.
+        val e = GuidanceEngine()
+        var t = e.feed(0, 3f) { frame(it, landmarks = person(headY = 0.23f, feetY = 0.77f)) }
+        t = e.feed(t, 1f) { frame(it, landmarks = person(headY = 0.35f, feetY = 0.77f)) }
+        assertFalse(e.has(WarningCode.TooFar))
+        e.feed(t, 2f) { frame(it, landmarks = person(headY = 0.23f, feetY = 0.77f)) }
+        assertFalse(e.has(WarningCode.TooFar))
+    }
+
+    @Test
+    fun frontCameraPitchSignIsFlipped() {
+        // Pixel 10 front camera, issue #3: gravity (0.09, 9.76, 1.03) = screen tilted up 6 degrees, so the
+        // front lens looks 6 degrees UP. The hips sit slightly below the image centre (y .58). With the
+        // right sign that is level (no warning); with the back-camera sign it read as camera_high.
+        val pixelGravity = Vec3(0.09f, 9.76f, 1.03f)
+        val lm = person(headY = 0.31f - 0.03f, feetY = 0.81f, hipY = 0.58f)
+        val front = GuidanceEngine()
+        front.feed(0, 5f) { frame(it, landmarks = lm, gravity = pixelGravity, front = true) }
+        assertFalse(front.has(WarningCode.CameraHigh) || front.has(WarningCode.CameraLow) || front.has(WarningCode.TooFar),
+            "got ${front.status.active.map { it.code }}")
+        val back = GuidanceEngine()
+        back.feed(0, 5f) { frame(it, landmarks = lm, gravity = pixelGravity, front = false) }
+        assertTrue(back.has(WarningCode.CameraHigh), "back-camera sign should flag this")
+    }
+
+    @Test
+    fun jumpingHipsDoNotTriggerCameraHeight() {
+        // Hip position swings +-0.15 of the frame during a jump; the median keeps the verdict stable.
+        val e = GuidanceEngine()
+        var i = 0
+        e.feed(0, 6f) {
+            val hip = when (i++ % 15) { in 0..9 -> 0.52f; in 10..12 -> 0.42f; else -> 0.66f }
+            frame(it, landmarks = person(headY = 0.24f, feetY = 0.78f, hipY = hip))
+        }
+        assertFalse(e.has(WarningCode.CameraHigh) || e.has(WarningCode.CameraLow), "got ${e.status.active.map { it.code }}")
     }
 
     @Test
@@ -338,6 +394,8 @@ class GuidanceEngineTest {
     fun messagesMatchContractTable() {
         assertEquals("Place the phone at about waist height", WarningCode.CameraLow.suggestion)
         assertEquals(WarningCode.CameraLow.suggestion, WarningCode.CameraHigh.suggestion)
+        assertEquals("Fill about half the frame height, with room above your head to jump", WarningCode.TooFar.suggestion)
+        assertEquals(WarningCode.TooFar.suggestion, WarningCode.TooClose.suggestion)
         assertEquals(13, WarningCode.entries.size)
         assertEquals(
             setOf(

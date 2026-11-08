@@ -28,8 +28,8 @@ enum class WarningCode(
     CameraLow("camera_low", Severity.Warn, "Phone is too low", "Place the phone at about waist height"),
     CameraHigh("camera_high", Severity.Warn, "Phone is too high", "Place the phone at about waist height"),
     CameraTilted("camera_tilted", Severity.Warn, "Phone is tilted", "Keep the phone upright and level"),
-    TooFar("too_far", Severity.Warn, "You're too far away", "Move to fill about 60-80% of the frame height"),
-    TooClose("too_close", Severity.Warn, "You're too close", "Move to fill about 60-80% of the frame height"),
+    TooFar("too_far", Severity.Warn, "You're too far away", "Fill about half the frame height, with room above your head to jump"),
+    TooClose("too_close", Severity.Warn, "You're too close", "Fill about half the frame height, with room above your head to jump"),
     MotionBlur(
         "motion_blur", Severity.Warn, "Fast motion looks blurry",
         "More light lets the camera use a faster shutter",
