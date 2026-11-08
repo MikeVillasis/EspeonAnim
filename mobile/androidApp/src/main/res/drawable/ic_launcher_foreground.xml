@@ -1,0 +1,7 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Stylised jumping figure. -->
+    <path android:fillColor="#FFFFFF" android:pathData="M54,26m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="5" android:strokeLineCap="round"
+        android:pathData="M54,35 L54,58 M54,42 L38,34 M54,42 L70,34 M54,58 L42,76 M54,58 L66,76" />
+</vector>
