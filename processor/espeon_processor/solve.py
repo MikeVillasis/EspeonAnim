@@ -104,6 +104,42 @@ def ballistic_correct(pel_z, prob_max, flight, fps, g=G_CM, min_flight_s=0.15, m
     return delta, infos
 
 
+def support_center(ankle_xy, on, sigma=2.0, min_len=3):
+    """Root XY from the planted feet instead of the hips (which sway when crouching).
+
+    ankle_xy (F,2feet,2) world ankle xy in cm, on (F,2) contact booleans [left, right].
+    Contact: midpoint of the planted feet's phase-mean positions; a single planted foot is offset by half the
+    stance vector (taken from the nearest two-foot frame). Flight: linear in time between the takeoff and landing
+    centres. A Gaussian (sigma frames, ~6 frame blend) removes velocity steps at phase changes.
+    """
+    F = len(on)
+    pin = np.full((F, 2, 2), np.nan)
+    for k in range(2):
+        for s, e in runs(on[:, k]):
+            if e - s >= min_len:
+                pin[s:e, k] = ankle_xy[s:e, k].mean(0)
+    both = ~np.isnan(pin).any(2).any(1)
+    stance = np.where(both[:, None], pin[:, 1] - pin[:, 0], np.nan)          # left -> right
+    c = np.full((F, 2), np.nan)
+    c[both] = pin[both].mean(1)
+    gb = np.flatnonzero(both)
+    for k in range(2):
+        only = ~np.isnan(pin[:, k]).any(1) & ~both
+        for f in np.flatnonzero(only):
+            if len(gb):
+                v = stance[gb[np.argmin(np.abs(gb - f))]]
+                c[f] = pin[f, k] + 0.5 * (v if k == 0 else -v)
+            else:
+                c[f] = pin[f, k]
+    ok = ~np.isnan(c[:, 0])
+    if not ok.any():
+        c[:] = ankle_xy.mean(1)
+    else:
+        idx = np.arange(F)
+        c = np.stack([np.interp(idx, idx[ok], c[ok, a]) for a in range(2)], 1)
+    return gaussian_filter1d(c, sigma, axis=0, mode="nearest")
+
+
 def solve(gem: Gem, window, rig: Rig, scale: float, out_fps=60.0, rt: Retargeter | None = None,
           smooth=True, lock=True, ballistic=True) -> Solved:
     a, b = window
@@ -170,7 +206,11 @@ def solve(gem: Gem, window, rig: Rig, scale: float, out_fps=60.0, rt: Retargeter
     wflight = uniform_filter1d(flight.astype(float), 3, mode="nearest")
     clearance = np.clip(h.min(1), 0, None)
     root_t = np.zeros((F, 3))
-    root_t[:, :2] = pel_w[:, :2]
+    ank = np.stack([wt[:, rig.idx['foot_l'], :2], wt[:, rig.idx['foot_r'], :2]], 1)
+    cxy = support_center(ank, on)
+    pel_w[:, :2] -= cxy[0]                      # root starts at the origin
+    root_t[:, :2] = cxy - cxy[0]
+    stats['root_travel_cm'] = [round(float(v), 2) for v in root_t[-1, :2]]
     root_t[:, 2] = wflight * clearance
     pelvis_t = pel_w - root_t
 
@@ -183,7 +223,7 @@ def solve(gem: Gem, window, rig: Rig, scale: float, out_fps=60.0, rt: Retargeter
     h_after = foot_low_height(wt1, rig)
     stats["foot_floor_error_cm"] = float(np.abs(h_after[on]).mean()) if on.any() else 0.0
 
-    debug.update(dict(floor=floor, flight30=flight, on30=on, prob30=prob, pelvis_world30=pel_w.copy(),
+    debug.update(dict(window_start_s=a / fps, floor=floor, flight30=flight, on30=on, prob30=prob, pelvis_world30=pel_w.copy(),
                       clearance30=clearance, h_low30=h_after, soma_ue30=P, theta=theta, origin=origin,
                       lq30=lq_l, root30=root_t, pel30=pelvis_t))
 

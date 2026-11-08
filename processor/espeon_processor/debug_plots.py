@@ -38,6 +38,24 @@ def contact_sheet(motion, path, n=10, title=""):
     plt.close(fig)
 
 
+def root_xy_plot(motion, path, title=""):
+    rig, wq, wt = fk_from_motion(motion)
+    t = np.arange(len(wt)) / motion["fps"]
+    root = np.array(motion["root_translation"])
+    pel = wt[:, rig.idx["pelvis"]]
+    fig, ax = plt.subplots(1, 2, figsize=(10, 4))
+    for a, k, nm in ((ax[0], 0, "X (right)"), (ax[1], 1, "Y (forward)")):
+        a.plot(t, root[:, k], label="root")
+        a.plot(t, pel[:, k], label="pelvis (world)", lw=1)
+        a.set_title(f"{title} {nm} cm")
+        a.grid(alpha=0.3)
+        a.legend(fontsize=8)
+        a.set_xlabel("s")
+    fig.tight_layout()
+    fig.savefig(path, dpi=100)
+    plt.close(fig)
+
+
 def height_plot(motion, on60, path, title="", info=None):
     rig, wq, wt = fk_from_motion(motion)
     fps = motion["fps"]

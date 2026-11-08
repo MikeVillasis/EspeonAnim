@@ -116,7 +116,7 @@ def test_motion_is_upright_forward_and_grounded(jump1, rig):
     assert (L[:n, 0] - R[:n, 0]).mean() > 10, "character's left (+X) should be on +X"
     fwd = wt[:n, rig.idx["ball_l"], 1] - wt[:n, rig.idx["foot_l"], 1]
     assert fwd.mean() > 0, "toes should point to +Y (Manny forward)"
-    assert abs(wt[0, rig.idx["pelvis"], 0]) < 5 and abs(wt[0, rig.idx["pelvis"], 1]) < 5      # starts at origin
+    assert abs(wt[0, rig.idx["pelvis"], 0]) < 15 and abs(wt[0, rig.idx["pelvis"], 1]) < 15      # root starts at origin
     assert wt[:, rig.idx["head"], 2].max() > 140 and wt[:, :, 2].min() > -3                   # nothing below the floor
     assert np.array(d["root_translation"])[:, 2].min() >= 0
 
@@ -251,3 +251,31 @@ def test_ballistic_ignores_short_or_long_flights():
     z, prob, flight, *_ = _synthetic_flight(air_frames=40)
     d, infos = ballistic_correct(z, prob, flight, 30.0)
     assert not infos
+
+
+# --- support-centre root motion -----------------------------------------------------------------------
+
+def test_support_center_ignores_hip_sway_and_interpolates_flight():
+    from espeon_processor.solve import support_center
+    F = 100
+    ank = np.zeros((F, 2, 2))
+    ank[:, 0] = [-10, 0]
+    ank[:, 1] = [10, 0]
+    on = np.ones((F, 2), bool)
+    on[40:60] = False                       # flight
+    ank[60:, :, 1] = 30.0                   # lands 30 cm forward
+    c = support_center(ank, on)
+    assert np.abs(c[:38]).max() < 2.0       # in-place crouch (hips would sway back; feet do not move)
+    assert abs(c[-1, 1] - 30) < 2.0
+    v = np.diff(c[:, 1])
+    assert np.abs(np.diff(v)).max() < 1.5   # no velocity steps
+    assert np.all(np.diff(c[38:62, 1]) >= -1e-6)
+
+
+@needs_gem
+def test_root_xy_stays_put_before_takeoff(jump1):
+    _, jump, s = jump1
+    d = motion_dict(s, "ue5_manny")
+    root = np.array(d["root_translation"])
+    take = int((jump.takeoff / 30 - s.debug["window_start_s"]) * 60)
+    assert np.ptp(root[:max(take - 3, 2), :2], axis=0).max() < 4.0

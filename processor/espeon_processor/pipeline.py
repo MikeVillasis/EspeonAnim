@@ -101,7 +101,7 @@ def _round(d, n=4):
 
 def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_intermediate=False, emit=None, ballistic=True):
     """Run the whole pipeline. Returns {"motion": path, "report": path}. Raises ProcessorError on failure."""
-    from .debug_plots import contact_sheet, height_plot
+    from .debug_plots import contact_sheet, height_plot, root_xy_plot
     prog = Progress(emit)
     t_start = time.time()
     timings = {}
@@ -251,6 +251,7 @@ def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_interme
         t_win0 = a / fps_g
         marks = {"crouch": jump.crouch_onset / fps_g - t_win0, "takeoff": jump.takeoff / fps_g - t_win0,
                  "landing": jump.landing / fps_g - t_win0}
+    root_xy_plot(md, dbg / "root_xy.png", title="root vs pelvis")
     height_plot(md, solved.on60, dbg / "height_contacts.png", title="pelvis height, sole heights and foot contacts", info=marks)
 
     quality = _quality(warnings, take_score)
