@@ -65,3 +65,17 @@ public:
 	UEspeonMakePreviewLevelCommandlet();
 	virtual int32 Main(const FString& Params) override;
 };
+
+/**
+ * -run=EspeonRenderPreview -Anim=<asset> -Out=<folder> [-Width=960 -Height=540 -Fps=60 -Views=front,side]
+ * Needs a real RHI: run WITHOUT -NullRHI and WITH -AllowCommandletRendering (and -RenderOffscreen if no display).
+ * Renders PNG sequences via SceneCapture2D, then encodes mp4s / contact sheet with ffmpeg (must be on PATH).
+ */
+UCLASS()
+class UEspeonRenderPreviewCommandlet : public UCommandlet
+{
+	GENERATED_BODY()
+public:
+	UEspeonRenderPreviewCommandlet();
+	virtual int32 Main(const FString& Params) override;
+};

@@ -17,7 +17,7 @@ public class EspeonAnimEditor : ModuleRules
 		{
 			"UnrealEd", "Json", "Slate", "SlateCore", "ToolMenus", "DesktopPlatform",
 			"AssetRegistry", "InputCore", "EditorFramework", "HTTP", "HTTPServer", "Sockets",
-			"FileUtilities", "ApplicationCore", "Projects"
+			"FileUtilities", "ApplicationCore", "Projects", "ImageWrapper", "RenderCore", "RHI"
 		});
 	}
 }
