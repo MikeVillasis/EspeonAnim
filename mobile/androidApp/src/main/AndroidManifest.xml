@@ -4,6 +4,11 @@
     <!-- Wi-Fi transfer to the PC (LAN only). -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Upload + wait for the PC in a foreground service so locking the phone does not lose the result. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Android 13+: progress/outcome notifications. Optional; the app works without. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Audio is not recorded (no RECORD_AUDIO). -->
     <uses-feature android:name="android.hardware.camera" android:required="true" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
@@ -26,6 +31,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".transport.SendService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

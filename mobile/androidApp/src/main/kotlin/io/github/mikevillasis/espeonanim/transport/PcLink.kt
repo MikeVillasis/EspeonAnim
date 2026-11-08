@@ -1,8 +1,6 @@
 package io.github.mikevillasis.espeonanim.transport
 
 import android.content.Context
-import io.github.mikevillasis.espeonanim.shared.transport.FileUploadSource
-import io.github.mikevillasis.espeonanim.shared.transport.JobStatus
 import io.github.mikevillasis.espeonanim.shared.transport.KtorPcTransport
 import io.github.mikevillasis.espeonanim.shared.transport.PairingInfo
 import io.github.mikevillasis.espeonanim.shared.transport.PairingStore
@@ -17,7 +15,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import java.io.File
 
 /** State of the "scan the QR code" flow. */
 sealed interface PairUi {
@@ -29,22 +26,8 @@ sealed interface PairUi {
     data class Error(val message: String) : PairUi
 }
 
-/** State of sending the current package to the PC. */
-sealed interface SendState {
-    data object Idle : SendState
-    data class Uploading(val progress: Float) : SendState
-
-    /** Uploaded; the PC is working on it ([status] is null until the first poll answers). */
-    data class Processing(val status: JobStatus?) : SendState
-    data class Done(val status: JobStatus) : SendState
-    data class Failed(val message: String, val needsRescan: Boolean, val status: JobStatus? = null) : SendState
-    data object Cancelled : SendState
-
-    val active: Boolean get() = this is Uploading || this is Processing
-}
-
 /**
- * Pairing and Wi-Fi sending for the Android app: glue between the shared [PcTransport], the
+ * Pairing for the Android app (sending lives in [SendService]): glue between the shared [PcTransport], the
  * stored pairing and the UI. Lives as long as the owning ViewModel.
  */
 class PcLink(
@@ -64,10 +47,6 @@ class PcLink(
     private val _online = MutableStateFlow<Boolean?>(null)
     val online: StateFlow<Boolean?> = _online.asStateFlow()
 
-    private val _send = MutableStateFlow<SendState>(SendState.Idle)
-    val send: StateFlow<SendState> = _send.asStateFlow()
-
-    private var sendJob: Job? = null
     private var pairJob: Job? = null
 
     // ---- Pairing ----
@@ -121,37 +100,6 @@ class PcLink(
                 false
             }
         }
-    }
-
-    // ---- Sending ----
-
-    fun send(file: File) {
-        val p = _pairing.value ?: return
-        if (_send.value.active) return
-        _send.value = SendState.Uploading(0f)
-        sendJob = scope.launch {
-            val transport = transportFor(p)
-            try {
-                val id = transport.upload(FileUploadSource(file)) { _send.value = SendState.Uploading(it) }
-                _send.value = SendState.Processing(null)
-                val result = transport.awaitResult(id) { _send.value = SendState.Processing(it) }
-                _send.value = if (result.isDone) SendState.Done(result)
-                else SendState.Failed(result.message.ifBlank { "The PC could not turn this take into an animation." }, false, result)
-            } catch (e: CancellationException) {
-                _send.value = SendState.Cancelled
-                throw e
-            } catch (e: PcTransportException) {
-                _send.value = SendState.Failed(e.message.orEmpty(), needsRescan = e is PcTransportException.Unauthorized)
-            }
-        }
-    }
-
-    fun cancelSend() {
-        sendJob?.cancel()
-    }
-
-    fun resetSend() {
-        if (!_send.value.active) _send.value = SendState.Idle
     }
 
     fun close() {

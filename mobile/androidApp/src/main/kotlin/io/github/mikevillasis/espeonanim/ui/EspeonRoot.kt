@@ -8,7 +8,12 @@ import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -22,6 +27,7 @@ import io.github.mikevillasis.espeonanim.CaptureViewModel
 import io.github.mikevillasis.espeonanim.shared.session.CalibrationPhase
 import io.github.mikevillasis.espeonanim.shared.session.Step
 import io.github.mikevillasis.espeonanim.shared.session.TakePhase
+import io.github.mikevillasis.espeonanim.shared.transport.SendState
 
 @Composable
 fun EspeonRoot(vm: CaptureViewModel = viewModel()) {
@@ -56,6 +62,13 @@ fun EspeonRoot(vm: CaptureViewModel = viewModel()) {
             PairingScreen(vm, onClose = { scanning = false })
             return@EspeonTheme
         }
+        // Opened from the notification (or after the process was killed): the session is gone but a
+        // send is running or has an outcome to show.
+        val send by vm.sendState.collectAsStateWithLifecycle()
+        if (state.step != Step.Package && send != SendState.Idle && send != SendState.Cancelled) {
+            SendOutcomeScreen(vm, onPair = { scanning = true })
+            return@EspeonTheme
+        }
         when (state.step) {
             Step.Setup -> SetupScreen(
                 vm, state, cameraGranted = granted, denied = denied, onPair = { scanning = true },
@@ -71,5 +84,20 @@ fun EspeonRoot(vm: CaptureViewModel = viewModel()) {
             Step.Takes -> TakesScreen(vm, state)
             Step.Package -> ExportScreen(vm, state, onPair = { scanning = true })
         }
+    }
+}
+
+/** Standalone view of the PC send, shown when there is no export screen to host it. */
+@Composable
+private fun SendOutcomeScreen(vm: CaptureViewModel, onPair: () -> Unit) {
+    androidx.compose.foundation.layout.Column(
+        modifier = androidx.compose.ui.Modifier
+            .fillMaxSize()
+            .background(androidx.compose.material3.MaterialTheme.colorScheme.background)
+            .systemBarsPadding()
+            .padding(20.dp),
+        verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+    ) {
+        SendToPcSection(vm, onPair, standalone = true)
     }
 }

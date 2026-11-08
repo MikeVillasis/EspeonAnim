@@ -1,5 +1,10 @@
 package io.github.mikevillasis.espeonanim.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,21 +20,36 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.mikevillasis.espeonanim.CaptureViewModel
 import io.github.mikevillasis.espeonanim.shared.transport.JobWarning
-import io.github.mikevillasis.espeonanim.transport.SendState
+import io.github.mikevillasis.espeonanim.shared.transport.SendState
 
 /** "Send to PC (Wi-Fi)": pairing prompt, upload progress, processing progress and outcome. */
 @Composable
-fun SendToPcSection(vm: CaptureViewModel, onPair: () -> Unit) {
+fun SendToPcSection(vm: CaptureViewModel, onPair: () -> Unit, standalone: Boolean = false) {
     val pairing by vm.pairing.collectAsStateWithLifecycle()
     val online by vm.pcOnline.collectAsStateWithLifecycle()
     val send by vm.sendState.collectAsStateWithLifecycle()
     val view = LocalView.current
+    val ctx = LocalContext.current
+
+    // Android 13+: ask once for notification permission so progress/outcome show up; send either way.
+    val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { vm.sendToPc() }
+    val startSend = {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            vm.sendToPc()
+        }
+    }
 
     // The screen must stay on while a (possibly minutes-long) upload runs.
     val active = send.active
@@ -54,6 +74,7 @@ fun SendToPcSection(vm: CaptureViewModel, onPair: () -> Unit) {
         }
         when (val s = send) {
             SendState.Idle, SendState.Cancelled -> {
+                if (standalone) return@Column
                 Text(
                     when (online) {
                         true -> "Paired with ${p.pcName} - ready"
@@ -64,7 +85,7 @@ fun SendToPcSection(vm: CaptureViewModel, onPair: () -> Unit) {
                     style = MaterialTheme.typography.bodyLarge,
                 )
                 if (s == SendState.Cancelled) Text("Sending was cancelled.", style = MaterialTheme.typography.bodyLarge)
-                Button(onClick = vm::sendToPc, modifier = Modifier.fillMaxWidth().height(64.dp)) {
+                Button(onClick = startSend, modifier = Modifier.fillMaxWidth().height(64.dp)) {
                     Text("Send to PC (Wi-Fi)", fontSize = 20.sp)
                 }
                 OutlinedButton(onClick = onPair, modifier = Modifier.fillMaxWidth()) { Text("Pair with a different PC") }
@@ -72,7 +93,7 @@ fun SendToPcSection(vm: CaptureViewModel, onPair: () -> Unit) {
             is SendState.Uploading -> {
                 Text("Sending to ${p.pcName}... ${(s.progress * 100).toInt()}%", style = MaterialTheme.typography.titleMedium)
                 LinearProgressIndicator(progress = { s.progress }, modifier = Modifier.fillMaxWidth())
-                Text("Keep the app open until the upload is finished.", style = MaterialTheme.typography.bodyMedium)
+                Text("You can lock the phone; progress and the result appear in a notification.", style = MaterialTheme.typography.bodyMedium)
                 OutlinedButton(onClick = vm::cancelSend, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
             }
             is SendState.Processing -> {
@@ -102,8 +123,8 @@ fun SendToPcSection(vm: CaptureViewModel, onPair: () -> Unit) {
                     Button(onClick = onPair, modifier = Modifier.fillMaxWidth().height(64.dp)) {
                         Text("Scan the QR code again", fontSize = 18.sp)
                     }
-                } else {
-                    Button(onClick = vm::sendToPc, modifier = Modifier.fillMaxWidth().height(64.dp)) {
+                } else if (!standalone) {
+                    Button(onClick = startSend, modifier = Modifier.fillMaxWidth().height(64.dp)) {
                         Text("Try again", fontSize = 20.sp)
                     }
                 }
