@@ -85,7 +85,10 @@ def score_take(gem: Gem, meta: dict, verdict):
     jump_s = 0.0 if not jump.found else 0.6 + 0.4 * min(1.0, jump.hips_rise_m / 0.15)
     guid = GUIDANCE_SCORE.get(verdict, 0.7)
     score = 0.4 * jump_s + 0.2 * vis + 0.2 * tracked + 0.15 * guid + 0.05 * (1 - cropped) - 0.3 * cropped
-    return jump, {"score": round(float(score), 4), "jump_detected": bool(jump.found),
+    on, _ = analysis.foot_contacts(gem.contact)
+    lo = max(0, int(jump.landing) - 5) if jump.found else 0
+    flick = int((np.diff(on[lo:lo + int(gem.fps)].astype(int), axis=0) != 0).sum())
+    return jump, {"landing_contact_flickers": flick, "score": round(float(score), 4), "jump_detected": bool(jump.found),
                   "jump_hips_rise_m": round(float(jump.hips_rise_m), 3), "flight_s": round(float(jump.flight_s), 3),
                   "crouch_depth_m": round(float(jump.crouch_depth_m), 3), "mean_landmark_visibility": round(vis, 3),
                   "tracked_fraction": round(tracked, 3), "cropped_fraction": round(cropped, 3),
@@ -96,7 +99,7 @@ def _round(d, n=4):
     return {k: (round(float(v), n) if isinstance(v, (float, np.floating)) else v) for k, v in d.items()}
 
 
-def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_intermediate=False, emit=None):
+def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_intermediate=False, emit=None, ballistic=True):
     """Run the whole pipeline. Returns {"motion": path, "report": path}. Raises ProcessorError on failure."""
     from .debug_plots import contact_sheet, height_plot
     prog = Progress(emit)
@@ -137,6 +140,14 @@ def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_interme
         sc["id"] = t.id
         scored.append((sc["score"], t, jump, sc))
     scored.sort(key=lambda x: -x[0])
+    tie = [x for x in scored if x[0] >= scored[0][0] - 0.02]
+    selection = {"reason": "highest score"}
+    if len(tie) > 1:
+        best = max(tie, key=lambda x: x[3]["flight_s"] - 0.03 * x[3]["landing_contact_flickers"])
+        selection = {"reason": f"scores within 0.02 for {[x[1].id for x in tie]}; preferred larger airtime and fewer landing "
+                               f"contact flickers (airtime {best[3]['flight_s']} s, {best[3]['landing_contact_flickers']} flickers)"}
+        scored.remove(best)
+        scored.insert(0, best)
     _, take, jump, take_score = scored[0]
     gem, meta = gems[take.id], metas[take.id]
     warnings, assumptions = [], []
@@ -221,7 +232,7 @@ def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_interme
     # --- retarget + cleanup ---------------------------------------------------------------------------
     prog("retarget", 0.90, "Retargeting to " + skeleton)
     t0 = time.time()
-    solved = solve(gem, (a, b), rig, scale)
+    solved = solve(gem, (a, b), rig, scale, ballistic=ballistic)
     timings["solve_s"] = round(time.time() - t0, 2)
     prog("cleanup", 0.95, "Cleanup done")
     if solved.stats["foot_slide_cm_before"] > 4.0:
@@ -250,11 +261,12 @@ def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_interme
         "stats": {"frames_in": int(meta.get("frames_source") or gem.T), "frames_out": md["frame_count"],
                   "mean_keypoint_confidence": round(float(take_score["mean_landmark_visibility"]), 3),
                   "foot_contact_frames": int(on_any.sum()), "gem_frames": int(gem.T), "output_seconds": round(md["frame_count"] / 60, 3),
-                  **_round(solved.stats, 3)},
+                  **_round({k: v for k, v in solved.stats.items() if k != "ballistic"}, 3)},
         "assumptions": assumptions,
         "details": {"processor_version": PROCESSOR_VERSION, "skeleton": skeleton, "device": device,
                     "take_scores": [s[3] for s in scored], "calibration": calib_info, "scale": round(scale, 4),
                     "trim": trim, "retarget_direction_error_deg": {"mean": round(mean_err, 3), **{k: round(v, 2) for k, v in seg_err.items()}},
+                    "selection": selection, "ballistic_flights": solved.stats.get("ballistic", []), "ballistic_enabled": ballistic,
                     "timings": timings, "input": str(input_path)},
     }
     timings["total_s"] = round(time.time() - t_start, 1)

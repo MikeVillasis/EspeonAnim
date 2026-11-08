@@ -77,6 +77,11 @@ def lock_feet(rig: Rig, local_q, root_t, pelvis_t, on, blend=4):
         for s, e in contact_phases(on[:, k]):
             pinA = wt[s:e, ifo].mean(0)
             pinB = wt[s:e, iba].mean(0)
+            # pin the sole to the floor: shift the pins so the lowest sole point averages 0 over the phase
+            hl = np.minimum(wt[s:e, ifo, 2] - ANKLE_H, wt[s:e, iba, 2] - BALL_H).mean()
+            hl = float(np.clip(hl, -5.0, 5.0))
+            pinA[2] -= hl
+            pinB[2] -= hl
             w = _ramp(e - s, blend)
             for f in range(s, e):
                 wf = w[f - s]

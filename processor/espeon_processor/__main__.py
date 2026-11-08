@@ -57,6 +57,7 @@ def main(argv=None):
     p.add_argument("--skeleton", default="ue5_manny")
     p.add_argument("--device", choices=["cuda", "cpu"], default=None)
     p.add_argument("--keep-intermediate", action="store_true", help="keep prepared video, motion.pt and the unpacked package")
+    p.add_argument("--no-ballistic", action="store_true", help="keep the reconstructed jump height instead of a ballistic arc")
     sub.add_parser("doctor", help="check the environment and print a JSON summary")
     args = ap.parse_args(argv)
 
@@ -74,7 +75,7 @@ def main(argv=None):
     try:
         from .pipeline import process
         from .gem_stage import ProcessorError
-        res = process(args.input, args.out, args.skeleton, args.device, args.keep_intermediate, emit)
+        res = process(args.input, args.out, args.skeleton, args.device, args.keep_intermediate, emit, not args.no_ballistic)
         emit({"event": "done", "motion": res["motion"], "report": res["report"]})
         return 0
     except Exception as e:  # noqa: BLE001

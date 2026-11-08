@@ -212,3 +212,42 @@ def test_package_missing_file_and_bare_video(tmp_path):
     v.write_bytes(b"x")
     c = load_capture(v, tmp_path / "w")
     assert len(c.actions) == 1 and c.calibration is None
+
+
+# --- ballistic flight ---------------------------------------------------------------------------------
+
+def _synthetic_flight(air_frames=16, bump=11.0):
+    F = 60
+    z = np.full(F, 95.0)
+    s, e = 20, 20 + air_frames
+    u = (np.arange(s, e) - s) / air_frames
+    z[s:e] += bump * 4 * u * (1 - u)
+    prob = np.ones(F)
+    prob[s:e] = 0.05
+    return z, prob, ~(prob > 0.5), s, e
+
+
+def test_ballistic_flight_apex_and_continuity():
+    from espeon_processor.solve import ballistic_correct
+    z, prob, flight, s, e = _synthetic_flight()
+    delta, infos = ballistic_correct(z, prob, flight, 30.0)
+    assert len(infos) == 1
+    T = infos[0]["airtime_s"]
+    assert 0.45 < T < 0.6
+    want = 980 * T * T / 8
+    new = z + delta
+    apex = new[s:e].max() - 95.0
+    assert apex > 0.75 * want and apex > 2 * 11     # far above the 11 cm measured, close to g T^2 / 8
+    assert abs(new[0] - 95) < 1e-6 and abs(new[-1] - 95) < 1e-6
+    vel = np.diff(new) * 30
+    assert np.abs(np.diff(vel)).max() < 0.5 * 980 * T / 2   # no velocity step: the takeoff speed is reached over several frames
+
+
+def test_ballistic_ignores_short_or_long_flights():
+    from espeon_processor.solve import ballistic_correct
+    z, prob, flight, *_ = _synthetic_flight(air_frames=3)
+    d, infos = ballistic_correct(z, prob, flight, 30.0)
+    assert not infos and np.abs(d).max() == 0
+    z, prob, flight, *_ = _synthetic_flight(air_frames=40)
+    d, infos = ballistic_correct(z, prob, flight, 30.0)
+    assert not infos

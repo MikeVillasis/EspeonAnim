@@ -2,9 +2,9 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 import numpy as np
-from scipy.ndimage import median_filter, uniform_filter1d
+from scipy.ndimage import gaussian_filter1d, median_filter, uniform_filter1d
 from . import mathutil as mu
-from .analysis import Gem, facing_xz, foot_contacts, hysteresis
+from .analysis import Gem, facing_xz, foot_contacts, hysteresis, runs
 from .cleanup import (ANKLE_H, BALL_H, foot_slide_cm, lock_feet, lowpass, resample, smooth_quats,
                       smooth_translation)
 from .retarget import Retargeter, pos_to_ue, rot_to_ue
@@ -52,8 +52,60 @@ def floor_curve(h, prob, fps):
     return uniform_filter1d(curve, 5, mode="nearest"), int(len(idx))
 
 
+G_CM = 980.0
+
+
+def _cross(m, i0, i1):
+    """Sub-frame time where m crosses 0.5 between frames i0 and i1 (falls back to i1)."""
+    a, b = m[i0], m[i1]
+    if (a - 0.5) * (b - 0.5) < 0 and a != b:
+        return i0 + (0.5 - a) / (b - a) * (i1 - i0)
+    return float(i1)
+
+
+def ballistic_correct(pel_z, prob_max, flight, fps, g=G_CM, min_flight_s=0.15, max_air_s=1.0, max_apex_cm=80.0, blend_sigma=2.0):
+    """Replace the vertical pelvis path in each flight phase by a parabola of the measured airtime.
+
+    pel_z (F,) cm; prob_max (F,) max foot contact probability; flight (F,) bool (both feet off).
+    Takeoff/landing are refined to sub-frame times from the 0.5 crossing of prob_max; the parabola passes through
+    the data's heights at those times; the correction is Gaussian-blended so vertical velocity stays continuous.
+    Returns (delta (F,) to add to pel_z, [info dicts]).
+    """
+    F = len(pel_z)
+    delta = np.zeros(F)
+    infos = []
+    for s, e in runs(flight):
+        if s < 1 or e >= F:
+            continue
+        t0, t1 = _cross(prob_max, s - 1, s), _cross(prob_max, e - 1, e)
+        T = (t1 - t0) / fps
+        if T < min_flight_s or T > max_air_s:
+            continue
+        z0, z1 = np.interp([t0, t1], np.arange(F), pel_z)
+        f = np.arange(int(np.ceil(t0)), int(np.floor(t1)) + 1)
+        u = (f - t0) / (t1 - t0)
+        apex = min(g * T * T / 8.0, max_apex_cm)
+        target = z0 + (z1 - z0) * u + 4 * apex * u * (1 - u)
+        d = np.zeros(F)
+        d[f] = target - pel_z[f]
+        orig = float((pel_z[f] - (z0 + (z1 - z0) * u)).max())
+        delta += d
+        infos.append({"takeoff_s": t0 / fps, "landing_s": t1 / fps, "airtime_s": T, "apex_original_cm": orig,
+                      "apex_ballistic_cm": apex, "capped": bool(g * T * T / 8.0 > max_apex_cm)})
+    if infos and blend_sigma > 0:
+        delta = gaussian_filter1d(delta, blend_sigma, mode="constant")
+        ratios = []                      # the blur shaves the apex: rescale so the final apex matches the parabola
+        for i in infos:
+            f0, f1 = int(np.ceil(i["takeoff_s"] * fps)), int(np.floor(i["landing_s"] * fps))
+            z = pel_z[f0:f1 + 1] + delta[f0:f1 + 1]
+            got = (z - np.linspace(z[0], z[-1], len(z))).max()
+            ratios.append(i["apex_ballistic_cm"] / got if got > 1 else 1.0)
+        delta = delta * float(np.clip(np.mean(ratios), 1.0, 1.4))
+    return delta, infos
+
+
 def solve(gem: Gem, window, rig: Rig, scale: float, out_fps=60.0, rt: Retargeter | None = None,
-          smooth=True, lock=True) -> Solved:
+          smooth=True, lock=True, ballistic=True) -> Solved:
     a, b = window
     g = gem.slice(a, b)
     fps, F = g.fps, g.T
@@ -102,6 +154,17 @@ def solve(gem: Gem, window, rig: Rig, scale: float, out_fps=60.0, rt: Retargeter
     stats["floor_offset_cm_median"] = float(np.median(floor))
     stats["floor_drift_cm"] = float(np.ptp(floor))
     stats["floor_samples"] = nfl
+
+    # --- ballistic flight correction (GEM underestimates jump height) ---------------------------
+    stats["ballistic"] = []
+    if ballistic and flight.any():
+        delta, infos = ballistic_correct(pel_w[:, 2], prob.max(1), flight, fps)
+        pel_w[:, 2] += delta
+        h = h + delta[:, None]
+        for i in infos:
+            f0, f1 = int(np.ceil(i["takeoff_s"] * fps)), int(np.floor(i["landing_s"] * fps))
+            i["apex_final_cm"] = float((pel_w[f0:f1 + 1, 2] - np.linspace(pel_w[f0, 2], pel_w[f1, 2], f1 - f0 + 1)).max())
+            stats["ballistic"].append({k: (round(v, 3) if isinstance(v, float) else v) for k, v in i.items()})
 
     # --- root motion --------------------------------------------------------------------------
     wflight = uniform_filter1d(flight.astype(float), 3, mode="nearest")
