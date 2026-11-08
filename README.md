@@ -33,6 +33,7 @@ Android app ──Wi-Fi (.espeon package)──► Unreal plugin ──► proce
 1. Set up the processor: follow [`processor/README.md`](processor/README.md), then run `python -m espeon_processor doctor`.
 2. Open `EspeonAnimUE/EspeonAnim/EspeonAnim.uproject` (builds the plugin), then **Tools → EspeonAnim → EspeonAnim Capture**. The tab shows a QR code.
 3. Build and install the app: `cd mobile && gradlew :androidApp:installDebug` (Android SDK required).
+   The APK is arm64-v8a only (add `x86_64` to `abiFilters` in `mobile/androidApp/build.gradle.kts` for an emulator). `gradlew :androidApp:assembleRelease` builds a shrunk (R8) ~31 MB APK signed with the local debug keystore; the debug APK is ~68 MB.
 4. In the app: scan the QR code, record the calibration clip and a few jump takes, then **Send to PC**.
 5. The animation appears under `/Game/EspeonAnim/Animations`, and an FBX under `Saved/EspeonAnim/Exports`.
 
