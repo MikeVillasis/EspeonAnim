@@ -103,11 +103,18 @@ Shared by the phone app and processor.
 | `camera_moving` | block | Camera not static | Prop the phone up; don't hold it |
 | `low_light` | warn | Scene is dark | Turn on more lights or face a window |
 | `low_contrast` | warn | Clothes blend into background | Wear clothes that contrast with the wall behind you |
-| `camera_low` / `camera_high` | warn | Camera far below/above waist | Place the phone at about waist height |
+| `camera_low` / `camera_high` | warn | Camera far below/above waist (hip offset from the camera axis > 0.30 body heights, see below) | Place the phone at about waist height |
 | `camera_tilted` | warn | Strong pitch or roll | Keep the phone upright and level |
-| `too_far` / `too_close` | warn | Person too small/large in frame | Move to fill about 60–80% of the frame height |
+| `too_far` / `too_close` | warn | Standing person fills under 40% / over 70% of the frame height | Fill about half the frame height, with room above your head to jump |
 | `motion_blur` | warn | Fast motion blurred | More light lets the camera use a faster shutter |
 | `low_fps` | warn | Under 30 fps | Use 60 fps if your phone supports it |
+
+Framing thresholds (single source of truth; mirrored in `GuidanceConfig.kt` and `processor/espeon_processor/framing.py`, change all three together):
+
+- Height fraction = (lowest foot landmark - estimated head top) / frame height, head top = highest head landmark minus 5% of body height. The *standing* value is the max over a trailing 3 s window, so crouching or jumping does not count as "far". Target for a jump is about 40-65%, which leaves headroom; `too_far` below 0.40 (app hold 0.43), `too_close` above 0.70 (hold 0.67). Not evaluated while the body is cropped.
+- Camera height: offset of the hips from the camera axis in body heights = tan(elevation) / (height fraction x 2 tan(vfov/2)), elevation = camera pitch + angle of the hips above the image centre. Median over the same 3 s window. `camera_low` above +0.30 (hold 0.24), `camera_high` below -0.30. Camera pitch comes from the IMU gravity vector (`t_s,gx,gy,gz`): sin(pitch) = -gz/|g| for the back camera, +gz/|g| for the front camera (it looks along +z). Without IMU data the processor assumes pitch 0.
+- Measured on a well-framed Pixel 10 front-camera jump take: standing 50-60%, pitch +6 degrees (looking slightly up), offset median -0.02 (range -0.37..+0.18 during the jump), no framing warnings.
+- Over a whole take the processor reports a framing warning once it holds in at least 20% of frames (same as the app's take summary).
 
 `warn` takes are accepted; when warnings are likely to hurt the result the app says so plainly before the user sends.
 

@@ -55,6 +55,12 @@ class GuidanceEngine(private val config: GuidanceConfig = GuidanceConfig()) {
     private var lastT = -1L
     private var prevLandmarks: List<Landmark>? = null
 
+    // Trailing windows (timestamp ms, value) for framing: the standing height is the max of the
+    // body-height fraction over the last standingWindowMs (so a crouch or a jump does not look "far"),
+    // and the camera-height offset is the median over the same window (hips swing while jumping).
+    private val heightWin = ArrayDeque<Pair<Long, Float>>()
+    private val offsetWin = ArrayDeque<Pair<Long, Float>>()
+
     // Take accumulation.
     private var collecting = false
     private var frames = 0
@@ -68,6 +74,7 @@ class GuidanceEngine(private val config: GuidanceConfig = GuidanceConfig()) {
         trackers.values.forEach { it.clear() }
         lumaEma = null; contrastEma = null; gyroEma = null; speedEma = 0f
         lastT = -1; prevLandmarks = null
+        heightWin.clear(); offsetWin.clear()
         collecting = false; frames = 0; counts.fill(0)
         lastStatus = LiveStatus()
     }
@@ -130,8 +137,12 @@ class GuidanceEngine(private val config: GuidanceConfig = GuidanceConfig()) {
         input.gravity?.let { g ->
             val norm = sqrt(g.x * g.x + g.y * g.y + g.z * g.z)
             if (norm > 1f) {
-                // Camera looks along -z; sin(elevation) = -gz/|g| (gravity reading points toward the sky).
-                pitchDeg = toDeg(asin((-g.z / norm).coerceIn(-1f, 1f)))
+                // Gravity reading points toward the sky. The back camera looks along -z, the front
+                // camera along +z, so sin(elevation) = -gz/|g| (back) or +gz/|g| (front).
+                // (Using the back-camera sign on a front camera made a level phone read as tilted
+                // down and fired camera_high, issue #3.)
+                val sinElev = if (input.frontCamera) g.z / norm else -g.z / norm
+                pitchDeg = toDeg(asin(sinElev.coerceIn(-1f, 1f)))
                 val roll = toDeg(atan2(g.x, g.y))
                 // Distance from the nearest multiple of 90 degrees (portrait or landscape are both fine).
                 val m = ((roll % 90f) + 90f) % 90f
@@ -163,7 +174,13 @@ class GuidanceEngine(private val config: GuidanceConfig = GuidanceConfig()) {
         val cropped = headTop < config.cropMargin || feetY > 1f - config.cropMargin || feetHidden
         put(WarningCode.BodyCropped, cropped)
 
-        val heightFrac = (feetY - headTop).coerceAtLeast(0.01f)
+        // Standing height: max over the trailing window, ignoring cropped frames.
+        val curHeight = (feetY - headTop).coerceAtLeast(0.01f)
+        val heightFrac = if (cropped) curHeight else {
+            heightWin.addLast(lastT to curHeight)
+            while (heightWin.first().first < lastT - config.standingWindowMs) heightWin.removeFirst()
+            heightWin.maxOf { it.second }
+        }
         put(WarningCode.TooFar, !cropped && heightFrac < config.tooFarEnter, !cropped && heightFrac < config.tooFarHold)
         put(WarningCode.TooClose, !cropped && heightFrac > config.tooCloseEnter, !cropped && heightFrac > config.tooCloseHold)
 
@@ -172,7 +189,13 @@ class GuidanceEngine(private val config: GuidanceConfig = GuidanceConfig()) {
         val halfTan = tan(toRad(input.verticalFovDeg) / 2f)
         val elev = toRad(pitchDeg) + atan((0.5f - hipY) * 2f * halfTan)
         // distance in body heights = 1 / (heightFrac * 2 * tan(vfov/2)); offset = tan(elev) * distance.
-        val offset = tan(elev) / (heightFrac * 2f * halfTan)
+        val rawOffset = tan(elev) / (heightFrac * 2f * halfTan)
+        // Median over the window: crouching and jumping move the hips a lot.
+        val offset = if (cropped) rawOffset else {
+            offsetWin.addLast(lastT to rawOffset)
+            while (offsetWin.first().first < lastT - config.standingWindowMs) offsetWin.removeFirst()
+            offsetWin.map { it.second }.sorted().let { it[it.size / 2] }
+        }
         // offset > 0: hips are above the camera axis, so the camera is too low.
         val reliable = !cropped
         put(WarningCode.CameraLow, reliable && offset > config.cameraHeightEnter, reliable && offset > config.cameraHeightHold)

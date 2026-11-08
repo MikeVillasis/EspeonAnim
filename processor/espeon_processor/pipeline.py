@@ -4,7 +4,8 @@ from __future__ import annotations
 import json, shutil, sys, time
 from pathlib import Path
 import numpy as np
-from . import analysis
+from . import analysis, framing
+from .framing import framing_codes
 from .analysis import Gem
 from .gem_stage import ProcessorError, landmark_stats, reconstruct
 from .motion_io import motion_dict, validate_motion, write_motion
@@ -13,6 +14,7 @@ from .skeleton import Profile, Rig
 from .solve import manny_leg_length, solve
 from .validate import direction_error
 
+FRAMING_CODES = {"too_far", "too_close", "camera_low", "camera_high"}
 PROCESSOR_VERSION = "0.1.0"
 ASSUMED_HEIGHT_CM = 170.0
 
@@ -29,8 +31,11 @@ WARNINGS = {
     "no_person": ("block", "The performer was not tracked in most frames.", "Step into frame."),
     "low_light": ("warn", "The video is dark, which hurts pose estimation.", "Turn on more lights or face a window."),
     "low_fps": ("warn", "The video frame rate is below 30 fps.", "Use 60 fps if your phone supports it."),
-    "too_far": ("warn", "The performer is small in the frame.", "Move to fill about 60-80% of the frame height."),
-    "too_close": ("warn", "The performer fills almost the whole frame.", "Move to fill about 60-80% of the frame height."),
+    # framing codes/thresholds: framing.py and docs/formats.md section 4 (same text as the app's WarningCode.kt)
+    "too_far": ("warn", "The performer is small in the frame.", "Fill about half the frame height, with room above your head to jump"),
+    "too_close": ("warn", "The performer fills almost the whole frame.", "Fill about half the frame height, with room above your head to jump"),
+    "camera_low": ("warn", "The phone was low (the hips sat well above the middle of the frame).", "Place the phone at about waist height"),
+    "camera_high": ("warn", "The phone was high (the hips sat well below the middle of the frame).", "Place the phone at about waist height"),
     "foot_sliding": ("warn", "Feet slid noticeably during ground contact before cleanup (fixed by foot locking).",
                      "Good light and a plain floor help the tracker; check the result near landings."),
     "scale_mismatch": ("warn", "Leg length measured in the action take differs from the calibration clip.",
@@ -42,6 +47,24 @@ WARNINGS = {
     "weak_jump": ("warn", "The jump is small, so the reconstructed airtime and height may be inaccurate.",
                   "Jump higher and with a clear crouch beforehand."),
 }
+
+
+def _framing_message(code, fr):
+    h = fr["standing_height_median"] * 100
+    if code == "too_far":
+        return f"The performer stands at about {h:.0f}% of the frame height (target 40-65%)."
+    if code == "too_close":
+        return f"The performer stands at about {h:.0f}% of the frame height (target 40-65%, leaving room to jump)."
+    return WARNINGS[code][1] + f" Hip offset {fr['camera_offset_median']:+.2f} body heights, camera pitch {fr['pitch_deg']:+.0f} deg."
+
+
+def framing_for_take(take, landmarks_file, gem_fps=30.0, frame_range=None):
+    """Framing numbers for one take from its saved MediaPipe landmarks plus the IMU gravity when present."""
+    pitch, vfov, have_imu = framing.take_camera_info(take)
+    lms = np.load(landmarks_file)["landmarks"]
+    res = framing.analyze(lms, gem_fps, pitch, vfov, frame_range)
+    res["imu"] = have_imu
+    return res
 
 
 def make_warning(code, **over):
@@ -217,15 +240,21 @@ def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_interme
             warnings.append(w)
         if lm["mean_visibility"] < 0.6:
             warnings.append(make_warning("low_keypoint_confidence", message=f"Mean landmark visibility is {lm['mean_visibility']:.2f}."))
-        if lm["person_height_fraction"] < 0.4:
-            warnings.append(make_warning("too_far"))
-        elif lm["person_height_fraction"] > 0.97 and cf <= 0.1:
-            warnings.append(make_warning("too_close"))
+        if Path(meta["landmarks_file"]).exists():
+            fr = framing_for_take(take, meta["landmarks_file"], gem_fps=30.0, frame_range=(a, b))
+            for code in framing_codes(fr):
+                if code in ("too_close", "camera_low", "camera_high") and cf > 0.1:
+                    continue   # cropped: size and height cues are unreliable (body_cropped already warns)
+                warnings.append(make_warning(code, message=_framing_message(code, fr)))
+            assumptions.append(f"framing: standing height {fr['standing_height_median'] * 100:.0f}% of frame, camera pitch "
+                               f"{fr['pitch_deg']:+.0f} deg ({'IMU' if fr.get('imu') else 'no IMU, assumed level'})")
     if meta.get("mean_luma", 255) < 70:
         warnings.append(make_warning("low_light", message=f"The video is dark (mean luma {meta['mean_luma']:.0f}/255)."))
     if meta.get("source_fps", 60) < 29.5:
         warnings.append(make_warning("low_fps"))
     for w in take.guidance_warnings:
+        if w in FRAMING_CODES:
+            continue   # re-measured above from the landmarks + IMU; older app builds' verdicts were unreliable (issue #3)
         if w in WARNINGS and not any(x["code"] == w for x in warnings):
             warnings.append(make_warning(w))
 
