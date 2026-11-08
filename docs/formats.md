@@ -110,3 +110,38 @@ Shared by the phone app and processor.
 | `low_fps` | warn | Under 30 fps | Use 60 fps if your phone supports it |
 
 `warn` takes are accepted; when warnings are likely to hurt the result the app says so plainly before the user sends.
+
+## 5. Wi-Fi transfer (phone → Unreal plugin)
+
+The plugin runs a small HTTP server on the PC's LAN address (default port **47800**, configurable). Plain HTTP on the local network, protected by a pairing token.
+
+**Pairing.** The plugin shows a QR code encoding:
+
+```
+espeon://pair?v=1&h=<pc-lan-ip>&p=<port>&t=<token>&n=<url-encoded pc name>
+```
+
+`t` is a random 128-bit token (hex), regenerated when the user clicks "New pairing code". The phone stores the last pairing and checks it with `GET /api/v1/ping`.
+
+All requests except `ping` send `Authorization: Bearer <token>`; wrong or missing token → `401`.
+
+| Method & path | Body | Response |
+| --- | --- | --- |
+| `GET /api/v1/ping` | – | `{"name":"<pc name>","app":"EspeonAnim","version":"0.1.0","api":1}` |
+| `POST /api/v1/packages` | raw `.espeon` bytes, `Content-Type: application/zip`, max 1 GiB | `201 {"id":"<job id>"}` |
+| `GET /api/v1/packages/<id>` | – | `{"id","state","progress","message","quality","warnings":[...]}` |
+
+`state`: `received` → `processing` → `importing` → `done` | `failed`. `progress` is 0–1 across the whole job. On `done`, `quality` and `warnings` come from `report.json` so the phone can show the outcome.
+
+## 6. Processor command line
+
+The plugin (or a user) runs the processor as a separate process:
+
+```
+<venv python> -m espeon_processor process --input <file.espeon | video.mp4> --out <dir> [--skeleton ue5_manny] [--device cuda|cpu]
+```
+
+- Writes `motion.json`, `report.json` and debug media into `<dir>`.
+- Progress: one JSON object per line on stdout, e.g. `{"event":"progress","stage":"reconstruct","progress":0.42,"message":"Reconstructing 3D motion"}`; finishes with `{"event":"done","motion":"<path>","report":"<path>"}` or `{"event":"error","message":"..."}`. Other output goes to stderr.
+- Exit code 0 on success, non-zero on failure.
+- `python -m espeon_processor doctor` checks the environment (GPU, weights present) and prints a JSON summary.
