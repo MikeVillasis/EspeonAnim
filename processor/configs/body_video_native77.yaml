@@ -1,0 +1,48 @@
+# Original native77 final775 Motion with original ViTPose and Body Pose features.
+# Checkpoint and statistics paths resolve relative to this file.
+# Obtain yolox_humanart.onnx separately and place it here or change its path.
+# Keep motion_stats_raw.npz; the codec uses its trained 0.01 std floor.
+pose:
+  checkpoint: ../models/gem-x/body_s240000.ckpt
+  release: body
+  batch_size: 4
+observations:
+  checkpoint: ../models/gem-x/vitpose.pth
+  release_id: vitpose77-dinov3-huge-metrosim-256x192-v1
+  batch_size: 4
+detector:
+  checkpoint: ../models/gem-x/yolox_humanart.onnx  # unused: boxes come from MediaPipe (espeon_processor.run_gem)
+  device: cpu
+motion:
+  checkpoint: ../models/gem-x/motion_native77_e774_s292175.ckpt
+  stats: ../models/gem-x/motion_stats_raw.npz
+  network:
+    output_dim: 655
+    max_len: 120
+    cliffcam_dim: 3
+    cam_angvel_dim: 6
+    imgseq_dim: 1024
+    latent_dim: 512
+    num_layers: 12
+    num_heads: 8
+    mlp_ratio: 4.0
+    pred_cam_dim: 3
+    static_conf_dim: 6
+    dropout: 0.1
+    avgbeta: true
+    obs_num_joints: 77
+    sequence_static_slices:
+    - - 456
+      - 584
+    - - 584
+      - 640
+  condition_spec:
+    pose_release_id: gem-pose-body-s240000-v1:pose_tokens
+    observation_source: vitpose77-dinov3-huge-metrosim-256x192-v1
+    observation_joint_set: soma77_native_v1
+  time_options:
+    reference_fps: 30.0
+    default_fps: 30.0
+    fps_by_data_name: {}
+camera:
+  mode: static
