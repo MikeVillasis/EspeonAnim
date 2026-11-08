@@ -74,3 +74,33 @@ Plugins/**/Intermediate/*
 # Cache files for the editor to use
 DerivedDataCache/*
 
+
+# --- EspeonAnim additions ---
+# Visual Studio 2022+ solution format and editor settings
+*.slnx
+.vsconfig
+# Unreal per-user and generated folders anywhere in the tree
+**/Saved/
+**/Intermediate/
+**/Binaries/
+**/DerivedDataCache/
+**/Content/Developers/
+# Epic mannequin content is copied from the engine install by tools/setup_mannequin, not redistributed
+EspeonAnimUE/EspeonAnim/Content/Characters/Mannequins/
+# Local test footage and processing outputs
+testdata/
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+processor/models/
+processor/out/
+# Android / Gradle / Kotlin
+.gradle/
+build/
+local.properties
+.kotlin/
+*.iml
+.idea/
+captures/
