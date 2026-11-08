@@ -50,6 +50,8 @@ data class Performer(
 data class CameraInfo(
     @SerialName("focal_length_px") val focalLengthPx: Double? = null,
     @SerialName("lens_facing") val lensFacing: String,
+    /** True when the stored video is horizontally mirrored (selfie-style). Absent in old packages = false. */
+    val mirrored: Boolean = false,
 )
 
 @Serializable

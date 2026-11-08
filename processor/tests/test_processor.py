@@ -373,3 +373,41 @@ def test_real_badly_framed_clip_still_warns():
     lms, fps = _landmarks_from_video(RAW / "Jump1.mp4", 4)
     r = framing.analyze(lms, fps)
     assert r["cropped_fraction"] > 0.1      # head/feet leave the frame: body_cropped fires in the pipeline
+
+
+# --- mirrored (selfie-style) recordings: camera.mirrored -> horizontal flip before any analysis -------------------
+def test_take_mirrored_flag():
+    from espeon_processor.package import take_mirrored
+    assert take_mirrored({"camera": {"lens_facing": "front", "mirrored": True}}) is True
+    assert take_mirrored({"camera": {"lens_facing": "front", "mirrored": False}}) is False
+    # old packages (no field), no camera block, bare video: not mirrored
+    assert take_mirrored({"camera": {"lens_facing": "front"}}) is False
+    assert take_mirrored({}) is False and take_mirrored(None) is False
+
+
+def test_video_filters_flip_only_when_mirrored():
+    from espeon_processor.video import video_filters
+    assert "hflip" not in video_filters(False)
+    assert video_filters(True)[0] == "hflip"
+    assert video_filters(True, 30)[0] == "fps=30"
+
+
+@pytest.mark.skipif(__import__("shutil").which("ffmpeg") is None, reason="ffmpeg not available")
+def test_prepare_clip_flips_mirrored(tmp_path):
+    import subprocess
+    from espeon_processor.video import prepare_clip
+    src = tmp_path / "src.mp4"   # left half white, right half black
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "color=c=white:s=64x64:d=0.5:r=10,drawbox=x=32:y=0:w=32:h=64:color=black:t=fill",
+                    "-pix_fmt", "yuv420p", str(src)], check=True)
+
+    def left_right(p):
+        raw = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(p), "-frames:v", "1",
+                              "-f", "rawvideo", "-pix_fmt", "gray", "-"], check=True, capture_output=True).stdout
+        a = np.frombuffer(raw, np.uint8).reshape(64, 64)
+        return a[:, :16].mean(), a[:, 48:].mean()
+
+    l, r = left_right(prepare_clip(src, tmp_path / "plain"))
+    assert l > 200 and r < 50
+    l, r = left_right(prepare_clip(src, tmp_path / "flipped", mirrored=True))
+    assert l < 50 and r > 200

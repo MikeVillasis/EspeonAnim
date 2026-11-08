@@ -13,9 +13,21 @@ def probe(path):
     return json.loads(r.stdout)["streams"][0]
 
 
-def prepare_clip(src, out_dir=None, resample_fps=None, crf=16):
+def video_filters(mirrored=False, resample_fps=None):
+    """The ffmpeg -vf chain. The single place a mirrored (selfie-style) video is flipped back: hflip runs on the
+    upright image (autorotate has already been applied), so everything downstream sees an un-mirrored video."""
+    vf = ["pad=ceil(iw/2)*2:ceil(ih/2)*2"]
+    if mirrored:
+        vf.insert(0, "hflip")
+    if resample_fps:
+        vf.insert(0, f"fps={resample_fps}")
+    return vf
+
+
+def prepare_clip(src, out_dir=None, resample_fps=None, crf=16, mirrored=False):
     """Bake rotation metadata into pixels (ffmpeg autorotate), H.264 yuv420p, no audio.
 
+    With mirrored=True the frames are flipped horizontally (manifest camera.mirrored, docs/formats.md section 1).
     Keeps native fps unless resample_fps is given (GEM-X resamples to 30 fps itself, so
     the default of keeping native fps is fine). Returns path of <out_dir>/<clip>/prepared.mp4.
     """
@@ -23,9 +35,7 @@ def prepare_clip(src, out_dir=None, resample_fps=None, crf=16):
     out_dir = Path(out_dir) if out_dir else OUT_ROOT / src.stem
     out_dir.mkdir(parents=True, exist_ok=True)
     dst = out_dir / ("prepared.mp4" if resample_fps is None else f"prepared_{resample_fps}fps.mp4")
-    vf = ["pad=ceil(iw/2)*2:ceil(ih/2)*2"]
-    if resample_fps:
-        vf.insert(0, f"fps={resample_fps}")
+    vf = video_filters(mirrored, resample_fps)
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(src),
            "-map", "0:v:0", "-vf", ",".join(vf), "-c:v", "libx264", "-crf", str(crf),
            "-pix_fmt", "yuv420p", "-an", "-metadata:s:v:0", "rotate=0", "-movflags", "+faststart", str(dst)]

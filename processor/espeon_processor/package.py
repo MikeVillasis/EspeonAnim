@@ -28,6 +28,12 @@ class Capture:
     notes: list = field(default_factory=list)
 
 
+def take_mirrored(info) -> bool:
+    """Manifest `camera.mirrored`; missing (old packages, bare videos) means not mirrored (CameraX default)."""
+    cam = (info or {}).get("camera") or {}
+    return cam.get("mirrored") is True
+
+
 def _safe_extract(zf: zipfile.ZipFile, dest: Path):
     dest = dest.resolve()
     for m in zf.infolist():
