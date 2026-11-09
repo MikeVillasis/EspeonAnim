@@ -3,7 +3,8 @@
   Idempotent first-run installer for the EspeonAnim processor (Windows PowerShell 5.1, no admin needed).
 
 .DESCRIPTION
-  Creates processor\.venv (Python 3.12 via uv), installs torch, clones GEM-X at a pinned commit, installs the
+  Creates processor\.venv (Python 3.12 via uv; uv's Python is installed into processor\.python, not %APPDATA%,
+  and a venv pointing at any other Python is deleted and recreated), installs torch, clones GEM-X at a pinned commit, installs the
   Python packages, downloads the model weights / SOMA assets / MediaPipe pose model into processor\models
   (files already present with the expected size are skipped) and finally runs `python -m espeon_processor doctor`.
 
@@ -90,6 +91,7 @@ if (-not $ProcessorDir) { $ProcessorDir = Split-Path -Parent $PSScriptRoot }
 $ProcessorDir = [IO.Path]::GetFullPath($ProcessorDir)
 $Venv = Join-Path $ProcessorDir '.venv'
 $VenvPy = Join-Path $Venv 'Scripts\python.exe'
+$PythonDir = Join-Path $ProcessorDir '.python'
 $ModelsDir = Join-Path $ProcessorDir 'models'
 $GemxDir = Join-Path $ProcessorDir 'third_party\gem-x'
 
@@ -169,10 +171,40 @@ else {
 
 # ---------------------------------------------------------------- venv
 Emit 'venv' 0.08 'Creating the Python environment'
-if (Test-Path -LiteralPath $VenvPy) { Info "venv: present ($VenvPy)" }
-elseif ($DryRun) { Plan "uv venv `"$Venv`" --python $Python (uv downloads Python $Python if needed)" }
+# uv's Python lives inside the processor folder (not %APPDATA%\uv), so the editor can always run the venv.
+$env:UV_PYTHON_INSTALL_DIR = $PythonDir
+
+# Keep an existing venv only if its base Python is inside $PythonDir and actually runs.
+$venvReason = $null
+if (Test-Path -LiteralPath $VenvPy) {
+    $cfg = Join-Path $Venv 'pyvenv.cfg'
+    $homeDir = $null
+    if (Test-Path -LiteralPath $cfg) {
+        $line = Get-Content -LiteralPath $cfg | Where-Object { $_ -match '^\s*home\s*=' } | Select-Object -First 1
+        if ($line) { $homeDir = ($line -replace '^\s*home\s*=\s*', '').Trim() }
+    }
+    $inside = $false
+    if ($homeDir) {
+        try {
+            $homeFull = [IO.Path]::GetFullPath($homeDir).TrimEnd('\')
+            $inside = $homeFull.StartsWith($PythonDir.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)
+        } catch {}
+    }
+    if (-not $inside) { $venvReason = "its Python (home = $(if ($homeDir) { $homeDir } else { 'unknown' })) is not inside $PythonDir" }
+    elseif ((Invoke-Native $VenvPy @('-c', 'import sys')) -ne 0) { $venvReason = 'its python.exe does not run' }
+}
+if ((Test-Path -LiteralPath $VenvPy) -and -not $venvReason) { Info "venv: present ($VenvPy)" }
+elseif ($DryRun) {
+    if ($venvReason) { Plan "venv: $venvReason; would delete $Venv and recreate it" }
+    Plan "uv venv `"$Venv`" --python $Python --managed-python (uv downloads Python $Python into $PythonDir if needed)"
+}
 else {
-    $rc = Invoke-Native $uv @('venv', $Venv, '--python', $Python)
+    if ($venvReason) {
+        Info "venv: recreating, $venvReason"
+        try { Remove-Item -LiteralPath $Venv -Recurse -Force -ErrorAction Stop }
+        catch { Die 5 'venv' "Could not delete the old venv ($Venv): $($_.Exception.Message). Close anything using it (a running job) and run the setup again." }
+    }
+    $rc = Invoke-Native $uv @('venv', $Venv, '--python', $Python, '--managed-python')
     if ($rc -ne 0 -or -not (Test-Path -LiteralPath $VenvPy)) { Die 5 'venv' "uv venv failed (exit $rc)." }
 }
 
