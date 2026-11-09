@@ -21,7 +21,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.currentStateAsState
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.mikevillasis.espeonanim.CaptureViewModel
 import io.github.mikevillasis.espeonanim.shared.session.CalibrationPhase
@@ -37,6 +41,10 @@ fun EspeonRoot(vm: CaptureViewModel = viewModel()) {
         mutableStateOf(ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
     }
     var denied by remember { mutableStateOf(false) }
+    // Voice commands only listen while the app is on screen.
+    val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    val inForeground = lifecycleState.isAtLeast(Lifecycle.State.STARTED)
+    LaunchedEffect(inForeground) { vm.setForeground(inForeground) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         granted = ok
         denied = !ok
