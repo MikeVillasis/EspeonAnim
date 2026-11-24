@@ -149,7 +149,7 @@ UnrealEditor-Cmd.exe EspeonAnim.uproject -run=EspeonRenderPreview -Anim=/Game/Es
   - Phone tests need the owner to perform the take, so prepare the build and say exactly what to try.
 - **Writing style:** user-facing app text is short and plain. For an example, see the guidance suggestions in formats.md §4.
 
-## Current state (2026-11-16)
+## Current state (2026-11-24)
 
 - **Merged to `main`:**
   - The MVP pipeline, working end to end.
@@ -160,11 +160,9 @@ UnrealEditor-Cmd.exe EspeonAnim.uproject -run=EspeonRenderPreview -Anim=/Game/Es
   - Start over.
   - The `other` action and the best-jump trim.
   - The processor Python moved into the repo folder.
-- **Open:**
-  - **PR #15 (`voice-commands`):** "Start" and "Stop" voice commands. It is installed on the Pixel, and its on-device test is pending. Things to check:
-    - The system listening chime when the recognizer restarts.
-    - The latency of "Stop".
-    - The first-time permission flow.
+  - "Start" and "Stop" voice commands (PR #15), tested by the owner on the Pixel 10.
+  - This agent brief (PR #16).
+- **Open PRs:** none.
 - **Not yet verified on the device:** the multi-jump take and Start over.
 - **Deferred:** authoring an Unreal Agent Skill. Don't raise it until the owner asks.
 
