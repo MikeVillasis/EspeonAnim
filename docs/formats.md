@@ -164,3 +164,89 @@ The plugin (or a user) runs the processor as a separate process:
 - Errors return `{"error":"..."}` with `400` (empty/bad body), `401` (token), `404` (unknown job), `413` (> 1 GiB) or `500`.
 - Processing takes minutes (≈1 min per take on an RTX 5070), so clients poll status with no overall timeout shorter than ~15 min.
 - The phone accepts only private, link-local or loopback IPv4 addresses and local hostnames (`*.local`, `*.lan`, …) from a pairing code.
+
+## 7. POV mode (first-person hands)
+
+Action `pov` captures **arms, hands and fingers** for first-person rigs. The phone is worn (head strap or chest mount) and looks down at the performer's hands. Everything in §1–§6 still applies; this section lists what is different.
+
+### Package (§1)
+
+- `action: "pov"`.
+- New top-level object `pov`: `{ "mount": "head" | "chest" }`. Chosen on the Setup screen (default `head`). Missing means `head`.
+- The `calibration` take is a **hands calibration** clip (about 6 s), not the A-pose turn:
+  - Both hands are held out in front at chest height for 3 s with fingers spread and palms facing the camera.
+  - Then the hands turn over (backs to the camera) for 3 s.
+- `performer.height_cm` is used to estimate arm length. When it is missing, 170 cm is assumed.
+- `camera.focal_length_px` is strongly recommended. Hand depth is computed from it.
+- IMU CSV is required in POV mode, because it gives the mount tilt. If it is missing, the processor assumes the camera points 45° down (`head`) or 30° down (`chest`) and reports an assumption.
+- Clips stay silent.
+
+### App flow
+
+- **Setup:** the action choice gains **POV (hands)**. Choosing it shows a Mount choice (Head / Chest) and a line explaining how to wear the phone.
+- **Voice commands:** they default to on in POV mode. The microphone permission is asked for on entering Calibration. The toggle still works.
+- **Takes:**
+  - The countdown is 5 s with beeps, as today.
+  - There is no auto-stop. "Stop" (or the button) ends the take, and so does a **30 s** cap (`maxTakeMs` for POV).
+- **Calibration:** a fixed 6 s clip with spoken-style beeps at 0 s, 3 s (turn hands over) and 6 s (done). It reuses the existing countdown and phase-tone cues. The screen text for the phases is "Palms to the camera, fingers spread" and then "Turn your hands over".
+- **Live analysis:**
+  - MediaPipe **Hand Landmarker** (`hand_landmarker.task`, Apache-2.0, up to 2 hands) replaces the pose landmarker while in POV.
+  - The overlay draws the 21 landmarks and bones per hand.
+  - Pose detection is not run in POV.
+
+### Guidance codes (§4 additions, POV only)
+
+| Code | Severity | Meaning | Suggestion shown to the user |
+| --- | --- | --- | --- |
+| `no_hands` | block | No hand detected for the last 1 s | Hold your hands in front of the camera |
+| `hand_cropped` | warn | A detected hand touches the frame edge (any landmark within 3% of an edge) | Keep your hands inside the picture; tilt the phone down more |
+| `hands_too_close` | warn | Hand bounding box taller than 60% of the frame | Hold your hands a bit farther from the camera |
+| `low_light`, `motion_blur`, `low_fps` | as §4 | as §4 | as §4 |
+
+- `body_cropped`, `camera_moving`, `camera_low/high`, `camera_tilted`, `too_far/close`, `multiple_people` and `no_person` are **not** evaluated in POV, because the worn camera always moves.
+- The take summary verdict uses the same 20%-of-frames rule as §4.
+- In the processor, the per-take quality also reports `hands_lost`:
+  - It is a warn when either hand is missing in more than 25% of frames.
+  - The message reads: "The left hand was out of view N% of the time".
+
+### Processor pipeline for `pov`
+
+1. **Detect:** MediaPipe Hand Landmarker in VIDEO mode, run on every frame. It gives up to 2 hands, each with:
+   - Image landmarks (normalized).
+   - World landmarks (metres, hand-centred).
+   - Handedness.
+
+   Handedness is stabilised over time, and a hand may not swap sides between neighbouring frames unless both are re-detected. The front camera is never used for POV; if `camera.mirrored` is true, frames are flipped first as today.
+2. **Hand size from calibration:**
+   - Measure each hand's wrist→middle_mcp length and the finger segment lengths from the calibration clip's world landmarks, taking the median over frames with a high presence score.
+   - Without calibration, scale MediaPipe's world landmarks to a hand length of 0.108 × height.
+3. **Hand position in camera space:**
+   - Depth comes from the pinhole model, comparing the known wrist→middle_mcp length with its image length (taking the hand orientation from the world landmarks into account).
+   - The wrist position in the camera frame comes from back-projecting the image wrist landmark at that depth.
+4. **Camera to head frame:**
+   - Take the **median** IMU gravity over the take to get the mount pitch and roll. Rotate camera-space positions into a level head frame: X right, Y forward, Z up, with the origin at the eyes.
+   - Per-frame head motion is **not** applied, so the hands are expressed relative to the head, which is what an FP camera rig needs.
+   - Chest mount: the origin is shifted to the eyes by a fixed offset of (0, +0.05, +0.30) × (height / 1.70) m.
+5. **Clean-up:**
+   - Fill gaps of up to 0.5 s by interpolation. In longer gaps, ease the arm to a rest pose (hand at the hip, below the view) over 0.3 s.
+   - Smooth positions and finger angles with a One-Euro filter tuned for 60 fps output.
+   - Resample to 60 fps.
+6. **Retarget to Manny:**
+   - The shoulders come from Manny's reference pose, after placing Manny's eyes at the head-frame origin (scaled by Manny height ÷ performer height).
+   - Wrist targets are scaled by Manny arm length ÷ performer arm length. Performer arm length = 0.44 × height, unless calibration gives better.
+   - **Two-bone IK** on `upperarm`/`lowerarm`:
+     - The elbow pole points down and out, (±0.3, 0, −1) in the head frame.
+     - If the target is out of reach, the arm straightens towards it.
+     - `clavicle` gets up to 15° of elevation and protraction towards far targets.
+   - `hand_*` rotation comes from the palm frame (wrist, index_mcp, pinky_mcp) of the world landmarks.
+   - **Fingers:**
+     - `*_metacarpal_*` stay at the reference pose.
+     - Each finger's three joints are solved by aligning bone directions to landmark segments: thumb = CMC→MCP→IP→TIP onto `thumb_01..03`, and the other fingers = MCP→PIP→DIP→TIP onto `*_01..03`.
+     - Rotations are clamped to anatomical ranges (flexion −10°..110°, abduction ±25°).
+7. **Output (`motion.json`):**
+   - `bones` lists only `clavicle_*`, `upperarm_*`, `lowerarm_*`, `hand_*` and the 15 finger bones per side.
+   - `root_translation` is all zeros. `pelvis_translation` is Manny's reference pelvis translation every frame, so the body stays still in the reference pose.
+   - The take is not trimmed, except that idle time at the start and end, where no hand is visible, is cut.
+   - `report.json` `details.pov` records the mount, the mount pitch and roll, the hand lengths, the assumptions and the `hands_lost` fractions.
+
+The best take is chosen the same way as `other`: by the take with the highest `mean_keypoint_confidence` and fewest lost-hand frames. The plugin needs no change; the asset is named `AS_pov_<timestamp>`.
