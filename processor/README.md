@@ -22,7 +22,7 @@ downloads the weights into `models/` (files already present with the right size 
 It is idempotent, so re-running repairs a broken install. Options: `-ProcessorDir`, `-Python`, `-Cuda`, `-DryRun`. Progress lines are
 `ESPEON_SETUP {"step":...,"progress":...,"message":...}`; exit code 0 = ready (2 licenses not accepted, 3 git missing, 4 uv,
 5 install, 6 download, 7 doctor failed). `-AcceptModelLicenses` confirms: GEM-X weights = NVIDIA Open Model License,
-SOMA-X assets = Apache-2.0, MediaPipe pose model = Apache-2.0 (about 7.5 GB download in total).
+SOMA-X assets = Apache-2.0, MediaPipe pose and hand models = Apache-2.0 (about 7.5 GB download in total).
 
 **Manual fallback** (what the script does):
 
@@ -36,7 +36,7 @@ uv pip install --python .venv\Scripts\python.exe -e ".[test]"
 ```
 
 (The script pins GEM-X to commit `4aef1452e5df171deff4f293c08e643eb450981e`.) Weights go in `models/` (download commands in
-`README_GEMX.md`). Check everything with `python -m espeon_processor doctor`.
+`README_GEMX.md`; the POV hand model is `models/hand_landmarker.task`, Apache-2.0, ~8 MB, from `storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/`). Check everything with `python -m espeon_processor doctor`.
 ## Usage
 
 ```
@@ -83,10 +83,25 @@ debug/height_contacts.png pelvis/sole heights and foot contacts
 9. **Output** (`motion_io.py`, `debug_plots.py`, `validate.py`): schema validation, report, debug images, and the
    retarget check (mean angle between Manny FK bone directions and SOMA directions).
 
+## POV action (first-person hands)
+
+`action: "pov"` in the manifest (or `--action pov`) captures arms, hands and fingers from a head- or chest-mounted phone
+(`../docs/formats.md` section 7). GEM-X is skipped completely, so no GPU is needed. Code: `pov_detect.py` (MediaPipe Hand
+Landmarker, VIDEO mode, 2 hands, handedness stabilisation; results cached in `.cache/<hash>-pov-hands-v1/`), `pov_geom.py`
+(hand size from the hands calibration clip or 0.108 x height, wrist depth from the pinhole model, IMU gravity -> level head
+frame), `pov_clean.py` (idle trim, gap fill, One-Euro, 60 fps), `pov_retarget.py` (two-bone IK, palm frame, finger solver,
+FK), `pov.py` (glue, motion.json, `details.pov`), `pov_debug.py` (`debug/pov_hands.png`: wrist trajectories + FK stick figures).
+
+- `motion.json` holds only `clavicle_*`, `upperarm_*`, `lowerarm_*`, `hand_*` and the 15 finger bones per side (no `root`/`pelvis` rotations);
+  `root_translation` is zero and `pelvis_translation` is Manny's reference one.
+- Warnings: `hands_lost` (a hand missing in over 25% of the frames), `hand_cropped`, `hands_too_close`, `low_light` (20% rule),
+  `calibration_missing`. Missing IMU / focal length / height fall back to documented assumptions listed in `report.json`.
+- Try it on any clip (results are only meaningful for real POV footage): `python -m espeon_processor process --input clip.mp4 --out out\pov --action pov`.
+
 ## Tests
 
 ```
-python -m pytest            # uses out/Jump*/gem_world.npz when present (skips GEM-dependent tests otherwise)
+python -m pytest            # uses out/Jump*/gem_world.npz when present (skips GEM-dependent tests otherwise); tests/test_pov.py needs neither GPU nor clips
 python tools/make_test_package.py   # builds out/test_package.espeon from testdata/raw (Jump1-4 + APoseTurn calibration)
 ```
 
@@ -94,4 +109,4 @@ python tools/make_test_package.py   # builds out/test_package.espeon from testda
 
 - GEM-X underestimates jump height (hips rise ~0.1-0.2 m); contacts decide flight time. The root never lifts; the pelvis carries the flight.
 - Only a single person, static camera; fingers, twist and IK bones keep their reference pose.
-- Camera intrinsics and IMU files in the package are not used yet.
+- Camera intrinsics and IMU files are not used by the body actions (jump / other); POV uses them. POV has not been validated on a real POV clip yet.

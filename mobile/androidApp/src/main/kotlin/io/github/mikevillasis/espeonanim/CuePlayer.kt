@@ -18,6 +18,9 @@ class CuePlayer {
     fun recordingStarted() = play(ToneGenerator.TONE_DTMF_D, 500)
     fun recordingStopped() = play(ToneGenerator.TONE_PROP_ACK, 400)
 
+    /** Mid-clip signal: the next calibration phase begins (POV: turn your hands over). */
+    fun phaseChanged() = play(ToneGenerator.TONE_PROP_BEEP2, 300)
+
     private fun play(tone: Int, ms: Int) {
         try { tones?.startTone(tone, ms) } catch (_: Throwable) { }
     }

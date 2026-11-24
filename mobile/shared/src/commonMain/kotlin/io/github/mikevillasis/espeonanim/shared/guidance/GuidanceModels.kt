@@ -46,6 +46,19 @@ object Lm {
     )
 }
 
+/** Number of landmarks of a MediaPipe hand. */
+const val HAND_LANDMARK_COUNT = 21
+
+/** Bone connections between the 21 hand landmarks, for drawing overlays. */
+val HAND_BONES: List<Pair<Int, Int>> = listOf(
+    0 to 1, 1 to 2, 2 to 3, 3 to 4,
+    0 to 5, 5 to 6, 6 to 7, 7 to 8,
+    5 to 9, 9 to 10, 10 to 11, 11 to 12,
+    9 to 13, 13 to 14, 14 to 15, 15 to 16,
+    13 to 17, 17 to 18, 18 to 19, 19 to 20,
+    0 to 17,
+)
+
 /** Device gravity as reported by Android TYPE_GRAVITY (device frame, m/s^2; points toward the sky). */
 data class Vec3(val x: Float, val y: Float, val z: Float)
 
@@ -69,6 +82,12 @@ data class FrameInput(
     val verticalFovDeg: Float = GuidanceConfig.DEFAULT_VERTICAL_FOV_DEG,
     /** True for the selfie camera: it looks along +z of the device, the back camera along -z. */
     val frontCamera: Boolean = false,
+    /**
+     * POV mode (docs/formats.md section 7): the hands found in the frame, each with 21 normalized
+     * landmarks (index 0 is the wrist). Non-null selects the POV rules (hands instead of the body);
+     * an empty list means no hand was found. Null (the default) means the normal body rules.
+     */
+    val hands: List<List<Landmark>>? = null,
 )
 
 data class GuidanceMessage(

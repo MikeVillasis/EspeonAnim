@@ -53,6 +53,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.mikevillasis.espeonanim.CaptureViewModel
 import io.github.mikevillasis.espeonanim.shared.session.ACTION_JUMP
 import io.github.mikevillasis.espeonanim.shared.session.ACTION_OTHER
+import io.github.mikevillasis.espeonanim.shared.session.ACTION_POV
+import io.github.mikevillasis.espeonanim.shared.session.MOUNT_CHEST
+import io.github.mikevillasis.espeonanim.shared.session.MOUNT_HEAD
 import io.github.mikevillasis.espeonanim.shared.session.JumpPhase
 import io.github.mikevillasis.espeonanim.ExportState
 import io.github.mikevillasis.espeonanim.shared.manifest.TakeRole
@@ -84,7 +87,8 @@ fun SetupScreen(vm: CaptureViewModel, state: SessionState, cameraGranted: Boolea
     ScreenScaffold("EspeonAnim") {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(
-                "Record yourself jumping or moving. The app checks each take, then makes one package for your PC.",
+                if (state.action == ACTION_POV) "Record your hands from a first-person view. The app checks each take, then makes one package for your PC."
+                else "Record yourself jumping or moving. The app checks each take, then makes one package for your PC.",
                 style = MaterialTheme.typography.bodyLarge,
             )
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -92,6 +96,20 @@ fun SetupScreen(vm: CaptureViewModel, state: SessionState, cameraGranted: Boolea
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     FilterChip(selected = state.action == ACTION_JUMP, onClick = { vm.setAction(ACTION_JUMP) }, label = { Text("Jump", fontSize = 18.sp) })
                     FilterChip(selected = state.action == ACTION_OTHER, onClick = { vm.setAction(ACTION_OTHER) }, label = { Text("Other movement", fontSize = 18.sp) })
+                    FilterChip(selected = state.action == ACTION_POV, onClick = { vm.setAction(ACTION_POV) }, label = { Text("POV (hands)", fontSize = 18.sp) })
+                }
+            }
+            if (state.action == ACTION_POV) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Mount", style = MaterialTheme.typography.titleMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        FilterChip(selected = state.povMount == MOUNT_HEAD, onClick = { vm.setPovMount(MOUNT_HEAD) }, label = { Text("Head", fontSize = 18.sp) })
+                        FilterChip(selected = state.povMount == MOUNT_CHEST, onClick = { vm.setPovMount(MOUNT_CHEST) }, label = { Text("Chest", fontSize = 18.sp) })
+                    }
+                    Text(
+                        "Strap the phone to your forehead or chest, screen facing out, camera looking down at your hands.",
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
                 }
             }
             OutlinedTextField(
@@ -106,7 +124,12 @@ fun SetupScreen(vm: CaptureViewModel, state: SessionState, cameraGranted: Boolea
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Before you start", style = MaterialTheme.typography.titleLarge)
-                    for (tip in listOf(
+                    for (tip in if (state.action == ACTION_POV) listOf(
+                        "Wear the phone on your head or chest. Keep it steady.",
+                        "Keep both hands in view, a little way from the camera.",
+                        "Use good light: face a window or turn on the lights.",
+                        "Voice commands are on: say \"Start\" and \"Stop\".",
+                    ) else listOf(
                         "Prop the phone up at about waist height. Don't hold it.",
                         "Stand 3-4 m away, with your whole body in view.",
                         "Use good light: face a window or turn on the lights.",
@@ -141,10 +164,12 @@ fun SetupScreen(vm: CaptureViewModel, state: SessionState, cameraGranted: Boolea
 
 @Composable
 fun CalibrationScreen(vm: CaptureViewModel, state: SessionState) {
+    val pov = state.action == ACTION_POV
     when (state.calibrationPhase) {
         CalibrationPhase.Review -> state.pending?.let {
             ClipReview(
                 title = "Calibration clip",
+                pov = pov,
                 take = it,
                 primaryLabel = "Use this clip",
                 onPrimary = vm::acceptCalibration,
@@ -155,16 +180,19 @@ fun CalibrationScreen(vm: CaptureViewModel, state: SessionState) {
         else -> CameraScreen(
             vm,
             allowFlip = state.calibrationPhase == CalibrationPhase.Ready,
+            voiceDefaultOn = pov,
             center = {
                 when (state.calibrationPhase) {
                     CalibrationPhase.Ready -> InstructionCard(
                         "Calibration",
-                        "First hold an A-pose for 3 seconds (arms slightly out, away from your body). " +
+                        if (pov) "Hold both hands out in front of you at chest height, fingers spread, palms to the camera, for 3 seconds. " +
+                            "Then turn your hands over for 3 seconds. Say \"Start\" or tap the button."
+                        else "First hold an A-pose for 3 seconds (arms slightly out, away from your body). " +
                             "Then turn slowly all the way around in place, taking about 10 seconds.",
                     )
-                    CalibrationPhase.Countdown -> BigNumber(seconds(state.remainingMs), "Get ready. Stand in an A-pose.")
-                    CalibrationPhase.APose -> BigNumber(seconds(state.remainingMs), "Hold the A-pose")
-                    CalibrationPhase.Turn -> BigNumber(seconds(state.remainingMs), "Turn slowly in place")
+                    CalibrationPhase.Countdown -> BigNumber(seconds(state.remainingMs), if (pov) "Get ready. Hands out, palms to the camera." else "Get ready. Stand in an A-pose.")
+                    CalibrationPhase.APose -> BigNumber(seconds(state.remainingMs), if (pov) "Palms to the camera, fingers spread" else "Hold the A-pose")
+                    CalibrationPhase.Turn -> BigNumber(seconds(state.remainingMs), if (pov) "Turn your hands over" else "Turn slowly in place")
                     CalibrationPhase.Finalizing -> CircularProgressIndicator(color = Color.White)
                     CalibrationPhase.Review -> Unit
                 }
@@ -215,11 +243,13 @@ private fun ErrorLine(msg: String, onDismiss: () -> Unit) {
 fun TakesScreen(vm: CaptureViewModel, state: SessionState) {
     val jumpPhase by vm.jumpPhase.collectAsStateWithLifecycle()
     val isJump = state.action == ACTION_JUMP
+    val isPov = state.action == ACTION_POV
     when (state.takePhase) {
         TakePhase.List -> TakeList(vm, state)
         TakePhase.Review -> state.pending?.let {
             ClipReview(
                 title = "Review ${it.id}",
+                pov = isPov,
                 take = it,
                 primaryLabel = "Keep",
                 onPrimary = vm::keepTake,
@@ -232,12 +262,14 @@ fun TakesScreen(vm: CaptureViewModel, state: SessionState) {
         else -> CameraScreen(
             vm,
             allowFlip = false,
+            voiceDefaultOn = isPov,
             center = {
                 when (state.takePhase) {
-                    TakePhase.Countdown -> BigNumber(seconds(state.remainingMs), if (isJump) "Get ready to jump" else "Get ready to move")
+                    TakePhase.Countdown -> BigNumber(seconds(state.remainingMs), if (isJump) "Get ready to jump" else if (isPov) "Get ready. Hands in view." else "Get ready to move")
                     TakePhase.Recording -> BigNumber(
                         seconds(state.remainingMs),
-                        if (!isJump) "Move when ready - tap Stop when done"
+                        if (isPov) "Move your hands - say Stop or wait 30 s"
+                        else if (!isJump) "Move when ready - tap Stop when done"
                         else if (jumpPhase == JumpPhase.Landed || jumpPhase == JumpPhase.Done) "Landed - hold still"
                         else "Jump when ready - recording stops after you land",
                     )
@@ -265,7 +297,8 @@ private fun TakeList(vm: CaptureViewModel, state: SessionState) {
     ScreenScaffold("Takes") {
         Column(Modifier.fillMaxSize()) {
             Text(
-                if (state.action == ACTION_JUMP) "Calibration clip saved. Now record your jumps: a 5 second countdown with beeps, then recording stops by itself after you land (at most 12 seconds)."
+                if (state.action == ACTION_POV) "Calibration clip saved. Now record your hands: a 5 second countdown with beeps, then say Stop or tap Stop when you are done (it stops by itself after 30 seconds)."
+                else if (state.action == ACTION_JUMP) "Calibration clip saved. Now record your jumps: a 5 second countdown with beeps, then recording stops by itself after you land (at most 12 seconds)."
                 else "Calibration clip saved. Now record your movement: a 5 second countdown with beeps, then tap Stop when you are done (it stops by itself after 12 seconds).",
                 style = MaterialTheme.typography.bodyLarge,
             )
@@ -283,7 +316,7 @@ private fun TakeList(vm: CaptureViewModel, state: SessionState) {
             state.takeAdvice?.let {
                 Text(it, Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
             }
-            VoiceControls(vm, capturing = false, modifier = Modifier.padding(bottom = 8.dp))
+            VoiceControls(vm, capturing = false, modifier = Modifier.padding(bottom = 8.dp), defaultOn = state.action == ACTION_POV)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                 Button(onClick = vm::startTake, modifier = Modifier.weight(1f).height(64.dp)) { Text("Record take", fontSize = 20.sp) }
                 Button(
@@ -332,6 +365,7 @@ fun VerdictChip(verdict: Verdict?) {
 @Composable
 fun ClipReview(
     title: String,
+    pov: Boolean = false,
     take: Take,
     primaryLabel: String,
     onPrimary: () -> Unit,
@@ -367,7 +401,8 @@ fun ClipReview(
                     }
                 } else if (take.role == TakeRole.Calibration) {
                     Text(
-                        "Check that you held the A-pose, then turned fully around and stayed in frame.",
+                        if (pov) "Check that your palms faced the camera, then the backs of your hands, and both hands stayed in frame."
+                        else "Check that you held the A-pose, then turned fully around and stayed in frame.",
                         style = MaterialTheme.typography.bodyLarge,
                     )
                 }

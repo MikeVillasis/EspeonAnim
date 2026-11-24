@@ -6,6 +6,7 @@ import io.github.mikevillasis.espeonanim.shared.manifest.CameraInfo
 import io.github.mikevillasis.espeonanim.shared.manifest.DeviceInfo
 import io.github.mikevillasis.espeonanim.shared.manifest.Manifest
 import io.github.mikevillasis.espeonanim.shared.manifest.Performer
+import io.github.mikevillasis.espeonanim.shared.manifest.PovInfo
 import io.github.mikevillasis.espeonanim.shared.manifest.TakeEntry
 import io.github.mikevillasis.espeonanim.shared.manifest.TakeGuidance
 import io.github.mikevillasis.espeonanim.shared.manifest.TakeRole
@@ -20,10 +21,16 @@ import kotlinx.coroutines.flow.asStateFlow
 data class SessionConfig(
     /** Countdown before calibration and action takes; long enough to get back into place. */
     val countdownMs: Long = 5_000,
-    /** Calibration: hold an A-pose first ... */
+    /** Calibration (jump/other): hold an A-pose first ... */
     val aPoseMs: Long = 3_000,
     /** ... then turn slowly through 360 degrees in place. */
     val turnMs: Long = 10_000,
+    /** POV calibration: palms to the camera for this long ... */
+    val povPalmsMs: Long = 3_000,
+    /** ... then the hands turned over for this long. */
+    val povBacksMs: Long = 3_000,
+    /** POV takes have no auto-stop; they end on Stop or after this long. */
+    val povMaxTakeMs: Long = 30_000,
     /**
      * Fallback limit: action takes stop by themselves after this long. Normally, for the jump action, the jump
      * detector ([JumpStopDetector]) stops the take earlier, after the landing; other actions stop when the user taps Stop.
@@ -37,8 +44,17 @@ data class SessionConfig(
 /** Manifest `action` values (docs/formats.md section 1). */
 const val ACTION_JUMP = "jump"
 const val ACTION_OTHER = "other"
+const val ACTION_POV = "pov"
+
+/** POV phone mounts (manifest `pov.mount`). */
+const val MOUNT_HEAD = "head"
+const val MOUNT_CHEST = "chest"
 
 enum class Step { Setup, Calibration, Takes, Package }
+/**
+ * [APose] and [Turn] are the first and second timed phase of the calibration clip: A-pose then turn
+ * (jump/other), or palms to the camera then hands turned over (POV). Lengths come from [SessionConfig].
+ */
 enum class CalibrationPhase { Ready, Countdown, APose, Turn, Finalizing, Review }
 enum class TakePhase { List, Countdown, Recording, Finalizing, Review }
 
@@ -72,6 +88,9 @@ sealed interface SessionEffect {
     /** One countdown second began; [secondsLeft] counts down to 1. The platform plays a beep. */
     data class CountdownBeep(val secondsLeft: Int) : SessionEffect
 
+    /** POV calibration moved to its second phase (hands turn over); the platform plays a tone. */
+    data object PhaseChange : SessionEffect
+
     /** Recording that was cancelled or rejected; delete its files. */
     data class DeleteFiles(val paths: List<String>) : SessionEffect
 }
@@ -80,6 +99,8 @@ data class SessionState(
     val step: Step = Step.Setup,
     val performerHeightCm: Int? = null,
     val action: String = ACTION_JUMP,
+    /** POV only: where the phone is worn, [MOUNT_HEAD] or [MOUNT_CHEST]. */
+    val povMount: String = MOUNT_HEAD,
     val calibrationPhase: CalibrationPhase = CalibrationPhase.Ready,
     /** Accepted calibration clip. */
     val calibration: Take? = null,
@@ -136,9 +157,14 @@ class CaptureSession(private val config: SessionConfig = SessionConfig()) {
 
     // ---- Setup ----
 
-    /** Choose what the performer will do ([ACTION_JUMP] or [ACTION_OTHER]); only possible on the Setup step. */
+    /** Choose what the performer will do ([ACTION_JUMP], [ACTION_OTHER] or [ACTION_POV]); only possible on the Setup step. */
     fun setAction(action: String) = update {
-        if (it.step == Step.Setup && action in setOf(ACTION_JUMP, ACTION_OTHER)) it.copy(action = action) else it
+        if (it.step == Step.Setup && action in setOf(ACTION_JUMP, ACTION_OTHER, ACTION_POV)) it.copy(action = action) else it
+    }
+
+    /** POV phone mount ([MOUNT_HEAD] or [MOUNT_CHEST]); only possible on the Setup step. */
+    fun setPovMount(mount: String) = update {
+        if (it.step == Step.Setup && mount in setOf(MOUNT_HEAD, MOUNT_CHEST)) it.copy(povMount = mount) else it
     }
 
     fun setPerformerHeight(cm: Int?) = update { it.copy(performerHeightCm = cm?.takeIf { h -> h in 50..250 }) }
@@ -310,7 +336,7 @@ class CaptureSession(private val config: SessionConfig = SessionConfig()) {
                         val id = "calibration"
                         phaseStartMs = nowMs
                         _state.value = s.copy(
-                            calibrationPhase = CalibrationPhase.APose, recordingId = id, remainingMs = config.aPoseMs,
+                            calibrationPhase = CalibrationPhase.APose, recordingId = id, remainingMs = firstPhaseMs(s.action),
                         )
                         return listOf(SessionEffect.StartRecording(id, TakeRole.Calibration))
                     }
@@ -318,19 +344,23 @@ class CaptureSession(private val config: SessionConfig = SessionConfig()) {
                     return beepFor(config.countdownMs - elapsed)
                 }
                 CalibrationPhase.APose -> {
-                    if (elapsed >= config.aPoseMs) {
+                    val first = firstPhaseMs(s.action)
+                    if (elapsed >= first) {
                         phaseStartMs = nowMs
-                        _state.value = s.copy(calibrationPhase = CalibrationPhase.Turn, remainingMs = config.turnMs)
+                        _state.value = s.copy(calibrationPhase = CalibrationPhase.Turn, remainingMs = secondPhaseMs(s.action))
+                        // Jump/other calibration has never had a phase cue; only POV does.
+                        if (s.action == ACTION_POV) return listOf(SessionEffect.PhaseChange)
                     } else {
-                        _state.value = s.copy(remainingMs = config.aPoseMs - elapsed)
+                        _state.value = s.copy(remainingMs = first - elapsed)
                     }
                 }
                 CalibrationPhase.Turn -> {
-                    if (elapsed >= config.turnMs) {
+                    val second = secondPhaseMs(s.action)
+                    if (elapsed >= second) {
                         _state.value = s.copy(calibrationPhase = CalibrationPhase.Finalizing, remainingMs = 0)
                         return listOf(SessionEffect.StopRecording)
                     }
-                    _state.value = s.copy(remainingMs = config.turnMs - elapsed)
+                    _state.value = s.copy(remainingMs = second - elapsed)
                 }
                 else -> Unit
             }
@@ -341,24 +371,29 @@ class CaptureSession(private val config: SessionConfig = SessionConfig()) {
                         takeCounter++
                         val id = "action_" + takeCounter.toString().padStart(2, '0')
                         phaseStartMs = nowMs
-                        _state.value = s.copy(takePhase = TakePhase.Recording, recordingId = id, remainingMs = config.maxTakeMs)
+                        _state.value = s.copy(takePhase = TakePhase.Recording, recordingId = id, remainingMs = maxTakeMs(s.action))
                         return listOf(SessionEffect.StartRecording(id, TakeRole.Action))
                     }
                     _state.value = s.copy(remainingMs = config.countdownMs - elapsed)
                     return beepFor(config.countdownMs - elapsed)
                 }
                 TakePhase.Recording -> {
-                    if (elapsed >= config.maxTakeMs) {
+                    val max = maxTakeMs(s.action)
+                    if (elapsed >= max) {
                         _state.value = s.copy(takePhase = TakePhase.Finalizing, remainingMs = 0)
                         return listOf(SessionEffect.StopRecording)
                     }
-                    _state.value = s.copy(remainingMs = config.maxTakeMs - elapsed)
+                    _state.value = s.copy(remainingMs = max - elapsed)
                 }
                 else -> Unit
             }
         }
         return emptyList()
     }
+
+    private fun firstPhaseMs(action: String) = if (action == ACTION_POV) config.povPalmsMs else config.aPoseMs
+    private fun secondPhaseMs(action: String) = if (action == ACTION_POV) config.povBacksMs else config.turnMs
+    private fun maxTakeMs(action: String) = if (action == ACTION_POV) config.povMaxTakeMs else config.maxTakeMs
 
     /** A [SessionEffect.CountdownBeep] the first time each whole second is shown. */
     private fun beepFor(remainingMs: Long): List<SessionEffect> {
@@ -381,7 +416,7 @@ class CaptureSession(private val config: SessionConfig = SessionConfig()) {
             (s.step == Step.Takes && s.takePhase == TakePhase.Finalizing)
         if (busy) return emptyList()
         val paths = (listOfNotNull(s.calibration, s.pending) + s.takes).flatMap { it.clip.filePaths() }.distinct()
-        _state.value = SessionState(action = s.action, recommendedKeptTakes = config.recommendedKeptTakes)
+        _state.value = SessionState(action = s.action, povMount = s.povMount, recommendedKeptTakes = config.recommendedKeptTakes)
         phaseStartMs = 0L
         takeCounter = 0
         lastBeepSecond = -1
@@ -430,6 +465,7 @@ class CaptureSession(private val config: SessionConfig = SessionConfig()) {
             device = device,
             performer = Performer(s.performerHeightCm),
             action = s.action,
+            pov = if (s.action == ACTION_POV) PovInfo(s.povMount) else null,
             takes = entries,
         )
         return PackagePlan(manifest, files)

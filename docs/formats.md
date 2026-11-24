@@ -77,7 +77,7 @@ Units and axes are **Unreal's**: centimeters, Z up, X forward, Y right (left-han
 - `skeleton` names a skeleton profile in `processor/espeon_processor/skeletons/<name>.json` (bone names, parents and reference local transforms dumped from Unreal).
 - `local_rotations[f][b]` is bone `b`'s rotation relative to its parent, in the same space as Unreal's reference pose, so it can be keyed directly onto the skeleton.
 - Root motion lives on `root`: ground-projected travel only, Z always 0. The jump height is in `pelvis_translation`, because level playback and CharacterMovement in Walking mode drop root-motion Z.
-- Bones not driven by the processor (fingers, twist bones, IK bones) are omitted from `bones` and keep their reference pose.
+- Bones not driven by the processor (fingers, twist bones, IK bones) are omitted from `bones` and keep their reference pose. `root` is listed first when present; POV output (§7) omits `root` and `pelvis` from `bones`, and readers still apply `root_translation` and `pelvis_translation`.
 
 ## 3. Processing report (`report.json`)
 
@@ -203,6 +203,11 @@ Action `pov` captures **arms, hands and fingers** for first-person rigs. The pho
 | `hands_too_close` | warn | Hand bounding box taller than 60% of the frame | Hold your hands a bit farther from the camera |
 | `low_light`, `motion_blur`, `low_fps` | as §4 | as §4 | as §4 |
 
+- App thresholds (mirrored in `GuidanceConfig.kt`; the processor uses the enter values):
+  - `no_hands`: on after 1 s without a hand, off after 300 ms with one.
+  - `hand_cropped`: enters at a 3% edge margin, holds until 4.5%.
+  - `hands_too_close`: enters at 60% of frame height, holds until 55%.
+  - Take verdict `poor` (app only, beyond the 20% rule): no hands in 25% or more of the frames, or hands too close in 70% or more.
 - `body_cropped`, `camera_moving`, `camera_low/high`, `camera_tilted`, `too_far/close`, `multiple_people` and `no_person` are **not** evaluated in POV, because the worn camera always moves.
 - The take summary verdict uses the same 20%-of-frames rule as §4.
 - In the processor, the per-take quality also reports `hands_lost`:
@@ -226,7 +231,7 @@ Action `pov` captures **arms, hands and fingers** for first-person rigs. The pho
 4. **Camera to head frame:**
    - Take the **median** IMU gravity over the take to get the mount pitch and roll. Rotate camera-space positions into a level head frame: X right, Y forward, Z up, with the origin at the eyes.
    - Per-frame head motion is **not** applied, so the hands are expressed relative to the head, which is what an FP camera rig needs.
-   - Chest mount: the origin is shifted to the eyes by a fixed offset of (0, +0.05, +0.30) × (height / 1.70) m.
+   - Chest mount: the chest camera sits below and behind the eyes, so camera-relative positions are moved into the eye frame by adding (0, +0.05, −0.30) × (height / 1.70) m.
 5. **Clean-up:**
    - Fill gaps of up to 0.5 s by interpolation. In longer gaps, ease the arm to a rest pose (hand at the hip, below the view) over 0.3 s.
    - Smooth positions and finger angles with a One-Euro filter tuned for 60 fps output.

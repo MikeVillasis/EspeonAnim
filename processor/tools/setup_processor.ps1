@@ -5,7 +5,7 @@
 .DESCRIPTION
   Creates processor\.venv (Python 3.12 via uv; uv's Python is installed into processor\.python, not %APPDATA%,
   and a venv pointing at any other Python is deleted and recreated), installs torch, clones GEM-X at a pinned commit, installs the
-  Python packages, downloads the model weights / SOMA assets / MediaPipe pose model into processor\models
+  Python packages, downloads the model weights / SOMA assets / MediaPipe pose and hand models into processor\models
   (files already present with the expected size are skipped) and finally runs `python -m espeon_processor doctor`.
 
   Machine-readable progress lines on stdout:   ESPEON_SETUP {"step":"...","progress":0.35,"message":"..."}
@@ -44,6 +44,8 @@ $GemxFiles = @(
 $SomaFiles = @(
     @('SOMA_neutral.npz', 26608121), @('SOMA_template_rig.usda', 28306038), @('SOMA_procedural_transforms.json', 20045))
 $MediaPipeSize = 30664242
+$HandUrl = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task'
+$HandSize = 7819105
 
 function Emit([string]$step, [double]$progress, [string]$message) {
     $o = [ordered]@{ step = $step; progress = [math]::Round($progress, 3); message = $message }
@@ -104,6 +106,7 @@ Info "Model licenses (downloaded by this script):"
 Info "  - GEM-X weights (nvidia/GEM-X, ~7.1 GB): NVIDIA Open Model License (https://huggingface.co/nvidia/GEM-X). Its backbone embeds DINOv3 weights."
 Info "  - SOMA-X assets (nvidia/SOMA-X @ $SomaRev, ~55 MB): Apache-2.0."
 Info "  - MediaPipe pose_landmarker_heavy.task (~31 MB): Apache-2.0 (Google)."
+Info "  - MediaPipe hand_landmarker.task (~8 MB, POV mode): Apache-2.0 (Google)."
 Info "  - GEM-X source code (NVlabs/gem-x): Apache-2.0."
 Info ""
 
@@ -308,6 +311,23 @@ else {
     } catch {
         Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
         Die 6 'weights_mediapipe' "Downloading the MediaPipe pose model failed: $($_.Exception.Message)"
+    }
+}
+
+Emit 'weights_hands' 0.94 'MediaPipe hand model'
+$hmPath = Join-Path $ModelsDir 'hand_landmarker.task'
+if (FileHasSize $hmPath $HandSize) { Info 'MediaPipe hand model: present, skipping' }
+elseif ($DryRun) { Plan "download $HandUrl -> models\hand_landmarker.task" }
+else {
+    New-Item -ItemType Directory -Force -Path $ModelsDir | Out-Null
+    $part = $hmPath + '.part'
+    try {
+        Invoke-WebRequest -Uri $HandUrl -OutFile $part -UseBasicParsing
+        if (-not (FileHasSize $part $HandSize)) { throw 'unexpected file size' }
+        Move-Item -LiteralPath $part -Destination $hmPath -Force
+    } catch {
+        Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
+        Die 6 'weights_hands' "Downloading the MediaPipe hand model failed: $($_.Exception.Message)"
     }
 }
 

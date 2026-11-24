@@ -76,6 +76,10 @@ data class TakeEntry(
     val guidance: TakeGuidance? = null,
 )
 
+/** POV mode only (docs/formats.md section 7): where the phone is worn, "head" or "chest". */
+@Serializable
+data class PovInfo(val mount: String = "head")
+
 @Serializable
 data class Manifest(
     val format: String = ManifestVersion.FORMAT,
@@ -85,6 +89,8 @@ data class Manifest(
     val device: DeviceInfo,
     val performer: Performer = Performer(),
     val action: String = "jump",
+    /** Present only for action "pov"; null (omitted) otherwise. */
+    val pov: PovInfo? = null,
     val takes: List<TakeEntry>,
 ) {
     fun toJson(): String = ManifestJson.encodeToString(serializer(), this)

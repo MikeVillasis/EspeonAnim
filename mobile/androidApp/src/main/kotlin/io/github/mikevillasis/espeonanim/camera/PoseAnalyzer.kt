@@ -1,8 +1,6 @@
 package io.github.mikevillasis.espeonanim.camera
 
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.Matrix
 import android.os.SystemClock
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -70,12 +68,8 @@ class PoseAnalyzer(
             lastAcceptedMs = now
 
             val rotation = image.imageInfo.rotationDegrees
-            val grid = buildLumaGrid(image, rotation)
-            val bitmap = image.toBitmap()
-            val upright = if (rotation == 0) bitmap else {
-                val m = Matrix().apply { postRotate(rotation.toFloat()) }
-                Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, m, true)
-            }
+            val grid = image.uprightLumaGrid(rotation)
+            val upright = image.toUprightBitmap(rotation)
             // MediaPipe needs strictly increasing timestamps.
             var ts = now
             if (ts <= lastTimestamp) ts = lastTimestamp + 1
@@ -105,39 +99,7 @@ class PoseAnalyzer(
         try { landmarker?.close() } catch (_: Throwable) { }
     }
 
-    /** Builds an upright, down-sampled luma image from the Y plane. */
-    private fun buildLumaGrid(image: ImageProxy, rotation: Int): LumaGrid {
-        val plane = image.planes[0]
-        val buf = plane.buffer
-        val rowStride = plane.rowStride
-        val pixStride = plane.pixelStride
-        val w = image.width
-        val h = image.height
-        val uw = if (rotation == 90 || rotation == 270) h else w
-        val uh = if (rotation == 90 || rotation == 270) w else h
-        val gw = GRID_BASE
-        val gh = (GRID_BASE.toFloat() * uh / uw).toInt().coerceAtLeast(8)
-        val out = ByteArray(gw * gh)
-        for (gy in 0 until gh) {
-            val v = ((gy + 0.5f) / gh * uh).toInt().coerceIn(0, uh - 1)
-            for (gx in 0 until gw) {
-                val u = ((gx + 0.5f) / gw * uw).toInt().coerceIn(0, uw - 1)
-                val sx: Int
-                val sy: Int
-                when (rotation) {
-                    90 -> { sx = v; sy = h - 1 - u }
-                    180 -> { sx = w - 1 - u; sy = h - 1 - v }
-                    270 -> { sx = w - 1 - v; sy = u }
-                    else -> { sx = u; sy = v }
-                }
-                out[gy * gw + gx] = buf.get(sy * rowStride + sx * pixStride)
-            }
-        }
-        return LumaGrid(gw, gh, out)
-    }
-
     companion object {
         const val MODEL_ASSET = "pose_landmarker_lite.task"
-        private const val GRID_BASE = 48
     }
 }

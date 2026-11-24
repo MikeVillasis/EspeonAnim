@@ -78,6 +78,10 @@ Phone app (KMP, Android now, iOS later)        PC (Windows + NVIDIA)
 - **Take selection:** every action take is reconstructed (about 70 s of GPU per take on the RTX 5070) and the best one is kept.
   - `jump`: the best jump is trimmed out with its crouch, landing and settle. A take with several jumps gives an info warning, `multiple_jumps`.
   - `other`: only idle time is trimmed. No jump-specific warnings are produced.
+- **POV mode (`action: "pov"`, formats.md §7):** first-person arms, hands and fingers from a head- or chest-worn phone.
+  - Hands come from MediaPipe Hand Landmarker (no GEM-X, no GPU). The hand depth comes from the measured hand size, and the mount tilt from the median IMU gravity.
+  - Arms are solved with two-bone IK and the fingers by aligning bone directions to landmark segments. The output has no root motion, and the body stays in the reference pose.
+  - Processor code: `pov*.py`. App code: `HandAnalyzer.kt` plus the POV paths in `CaptureSession` and `GuidanceEngine`.
 - **Mannequin assets:** Epic's mannequin is never committed. Users copy it from their engine install.
 - **App guidance:** it warns and coaches, and blocks a take only for `no_person`, `multiple_people`, `body_cropped` or `camera_moving`.
 - **Capture flow:**
