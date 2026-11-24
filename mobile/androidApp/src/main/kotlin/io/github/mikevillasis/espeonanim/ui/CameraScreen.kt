@@ -46,6 +46,7 @@ import io.github.mikevillasis.espeonanim.shared.guidance.FrameGuide
 import io.github.mikevillasis.espeonanim.shared.guidance.Lm
 import io.github.mikevillasis.espeonanim.shared.guidance.Severity
 import io.github.mikevillasis.espeonanim.shared.guidance.WarningCode
+import kotlinx.coroutines.flow.map
 
 /**
  * Live camera with frame guide, skeleton overlay and the guidance banner.
@@ -68,6 +69,7 @@ fun CameraScreen(
     val overlay by vm.overlay.collectAsStateWithLifecycle()
     val cameraError by vm.cameraError.collectAsStateWithLifecycle()
     val fps by vm.fps.collectAsStateWithLifecycle()
+    val capturing by remember { vm.state.map { it.capturing } }.collectAsStateWithLifecycle(false)
 
     val previewView = remember {
         PreviewView(ctx).apply {
@@ -89,6 +91,7 @@ fun CameraScreen(
             GuidanceBanner(vm)
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { center() }
             Column(Modifier.fillMaxWidth().padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                VoiceControls(vm, capturing = capturing, modifier = Modifier.padding(bottom = 8.dp))
                 if (fps > 0) {
                     Text(
                         "${fps} fps", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp,

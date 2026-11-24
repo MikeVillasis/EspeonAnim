@@ -37,6 +37,8 @@ Android app ──Wi-Fi (.espeon package)──► Unreal plugin ──► proce
 4. In the app: scan the QR code, record the calibration clip and a few jump takes, then **Send to PC**.
 5. The animation appears under `/Game/EspeonAnim/Animations`, and an FBX under `Saved/EspeonAnim/Exports`.
 
+**Voice commands (optional).** On the Calibration and Takes screens, switch on **Voice** to start and stop from across the room: say "Start" to begin calibration or a take, "Stop" to stop a take or cancel a countdown or calibration. It uses Android's speech recognizer (on-device when the phone supports it) and asks for the microphone permission when you switch it on. The microphone is used only for these two words; clips stay silent and no audio is stored or uploaded. Android may play a short listening sound as recognition restarts.
+
 Without a phone you can process any video directly: **Import package/video file…** in the tab, or
 `python -m espeon_processor process --input clip.mp4 --out out\clip`.
 

@@ -283,6 +283,7 @@ private fun TakeList(vm: CaptureViewModel, state: SessionState) {
             state.takeAdvice?.let {
                 Text(it, Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
             }
+            VoiceControls(vm, capturing = false, modifier = Modifier.padding(bottom = 8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                 Button(onClick = vm::startTake, modifier = Modifier.weight(1f).height(64.dp)) { Text("Record take", fontSize = 20.sp) }
                 Button(

@@ -9,10 +9,19 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Android 13+: progress/outcome notifications. Optional; the app works without. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Audio is not recorded (no RECORD_AUDIO). -->
+    <!-- Microphone is used only by the optional "Start"/"Stop" voice commands (speech recognizer).
+         Video clips are still recorded without audio, and no sound is stored or uploaded. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-feature android:name="android.hardware.camera" android:required="true" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false" />
+
+    <!-- Android 11+ package visibility: lets SpeechRecognizer find the device's recognition service. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
 
     <application
         android:allowBackup="false"

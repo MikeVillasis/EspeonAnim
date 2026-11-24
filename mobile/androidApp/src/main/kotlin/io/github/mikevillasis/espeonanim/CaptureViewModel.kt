@@ -1,11 +1,14 @@
 package io.github.mikevillasis.espeonanim
 
+import android.Manifest
 import android.app.Application
+import android.content.pm.PackageManager
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.os.SystemClock
 import androidx.camera.view.PreviewView
 import androidx.camera.video.VideoRecordEvent
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
@@ -32,13 +35,24 @@ import io.github.mikevillasis.espeonanim.shared.session.RecordedClip
 import io.github.mikevillasis.espeonanim.shared.session.SessionEffect
 import io.github.mikevillasis.espeonanim.shared.session.ACTION_JUMP
 import io.github.mikevillasis.espeonanim.shared.session.SessionState
+import io.github.mikevillasis.espeonanim.shared.session.CalibrationPhase
+import io.github.mikevillasis.espeonanim.shared.session.VoiceAction
+import io.github.mikevillasis.espeonanim.shared.session.VoiceCommand
+import io.github.mikevillasis.espeonanim.shared.session.resolveVoiceCommand
+import io.github.mikevillasis.espeonanim.voice.VoiceCommandListener
+import io.github.mikevillasis.espeonanim.voice.VoiceState
 import io.github.mikevillasis.espeonanim.transport.PcLink
 import io.github.mikevillasis.espeonanim.transport.SendRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -106,7 +120,68 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     fun resetSend() = SendRepository.reset(appContext)
 
 
+    // ---- Voice commands ("Start" / "Stop") ----
+    private val prefs = app.getSharedPreferences("espeon_settings", android.content.Context.MODE_PRIVATE)
+    private val _voiceEnabled = MutableStateFlow(prefs.getBoolean(PREF_VOICE, false))
+    val voiceEnabled: StateFlow<Boolean> = _voiceEnabled.asStateFlow()
+    private val _micGranted = MutableStateFlow(micPermissionGranted())
+    val micGranted: StateFlow<Boolean> = _micGranted.asStateFlow()
+    private val _foreground = MutableStateFlow(true)
+    private val voice = VoiceCommandListener(app, ::onVoiceCommand)
+
+    /** What the voice UI shows: Off when disabled or not on a screen that uses voice commands. */
+    val voiceState: StateFlow<VoiceState> = combine(_voiceEnabled, _micGranted, voice.state) { on, granted, v ->
+        when {
+            !on -> VoiceState.Off
+            !granted -> VoiceState.NeedsPermission
+            else -> v
+        }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, VoiceState.Off)
+
+    private fun micPermissionGranted() =
+        ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+    fun setVoiceEnabled(on: Boolean) {
+        prefs.edit().putBoolean(PREF_VOICE, on).apply()
+        _micGranted.value = micPermissionGranted()
+        _voiceEnabled.value = on
+    }
+
+    /** Call after the RECORD_AUDIO prompt or when returning from Settings. */
+    fun refreshMicPermission() { _micGranted.value = micPermissionGranted() }
+
+    /** Voice listening pauses while the app is in the background. */
+    fun setForeground(on: Boolean) {
+        _foreground.value = on
+        if (on) refreshMicPermission()
+    }
+
+    /** Screens where a command can do something; Setup, Package, review and finalizing stay silent. */
+    private fun voiceUseful(s: SessionState) =
+        s.capturing ||
+            (s.step == Step.Calibration && s.calibrationPhase == CalibrationPhase.Ready) ||
+            (s.step == Step.Takes && s.takePhase == TakePhase.List)
+
+    private fun startVoiceBinding() {
+        viewModelScope.launch {
+            combine(_voiceEnabled, _micGranted, _foreground, session.state.map(::voiceUseful)) { a, b, c, d -> a && b && c && d }
+                .distinctUntilChanged()
+                .collect { if (it) voice.start() else voice.stop() }
+        }
+    }
+
+    private fun onVoiceCommand(command: VoiceCommand) {
+        when (resolveVoiceCommand(state.value, command)) {
+            VoiceAction.StartCalibration -> startCalibration()
+            VoiceAction.StartTake -> startTake()
+            VoiceAction.StopTake -> stopTakeEarly()
+            VoiceAction.Cancel -> cancel()
+            VoiceAction.None -> Unit
+        }
+    }
+
     init {
+        startVoiceBinding()
         SendRepository.restoreIfNeeded(app)
         captureDir.deleteRecursively() // leftovers from a previous process; session state is in memory only
         captureDir.mkdirs()
@@ -365,10 +440,15 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     fun retryExport() = buildPackage()
 
     override fun onCleared() {
+        voice.stop()
         link.close()
         controller.shutdown()
         cues.release()
         imu.stop()
         analyzer?.close()
+    }
+
+    private companion object {
+        const val PREF_VOICE = "voice_commands"
     }
 }
