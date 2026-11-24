@@ -59,6 +59,17 @@ data class GuidanceConfig(
     val blurLimbSpeedHold: Float = 1.8f,
     val blurLumaMax: Float = 100f,
 
+    // ---- POV (hands). Same numbers as docs/formats.md section 7.
+    /** A hand landmark closer than this to the frame edge counts as cropped (hold: slightly looser). */
+    val handCropMargin: Float = 0.03f,
+    val handCropHoldMargin: Float = 0.045f,
+    /** Hand bounding box height as a fraction of the frame height. */
+    val handsTooCloseEnter: Float = 0.60f,
+    val handsTooCloseHold: Float = 0.55f,
+    /** Motion blur proxy for POV: wrist speed in frame heights per second (dim light only). */
+    val blurHandSpeedEnter: Float = 1.5f,
+    val blurHandSpeedHold: Float = 1.0f,
+
     /** Recording fps below this triggers low_fps ("under 30 fps"; 29.97 does not count). */
     val lowFpsBelow: Float = 29f,
 
@@ -69,6 +80,7 @@ data class GuidanceConfig(
         WarningCode.CameraLow to 2000, WarningCode.CameraHigh to 2000, WarningCode.CameraTilted to 1000,
         WarningCode.TooFar to 1500, WarningCode.TooClose to 1500, WarningCode.MotionBlur to 500,
         WarningCode.LowFps to 0,
+        WarningCode.NoHands to 1000, WarningCode.HandCropped to 400, WarningCode.HandsTooClose to 800,
     ),
     val offMs: Map<WarningCode, Long> = mapOf(
         WarningCode.NoPerson to 400, WarningCode.MultiplePeople to 800, WarningCode.BodyCropped to 600,
@@ -76,6 +88,7 @@ data class GuidanceConfig(
         WarningCode.CameraLow to 1500, WarningCode.CameraHigh to 1500, WarningCode.CameraTilted to 800,
         WarningCode.TooFar to 1000, WarningCode.TooClose to 1000, WarningCode.MotionBlur to 800,
         WarningCode.LowFps to 0,
+        WarningCode.NoHands to 300, WarningCode.HandCropped to 600, WarningCode.HandsTooClose to 800,
     ),
 
     // ---- Take summary.
@@ -88,6 +101,8 @@ data class GuidanceConfig(
     /** poor: head/feet cropped in more than this fraction of frames (spec: 5%). */
     val poorCroppedFraction: Float = 0.05f,
     val poorNoPersonFraction: Float = 0.25f,
+    /** POV: poor when no hand was visible for this fraction of frames. */
+    val poorNoHandsFraction: Float = 0.25f,
     val poorMultiplePeopleFraction: Float = 0.10f,
     val poorCameraMovingFraction: Float = 0.20f,
     /** poor: low_light AND low_contrast each persistent for this fraction of frames. */

@@ -2,6 +2,7 @@ package io.github.mikevillasis.espeonanim.shared
 
 import io.github.mikevillasis.espeonanim.shared.guidance.FrameInput
 import io.github.mikevillasis.espeonanim.shared.guidance.GuidanceEngine
+import io.github.mikevillasis.espeonanim.shared.guidance.HAND_LANDMARK_COUNT
 import io.github.mikevillasis.espeonanim.shared.guidance.Landmark
 import io.github.mikevillasis.espeonanim.shared.guidance.Lm
 import io.github.mikevillasis.espeonanim.shared.guidance.Severity
@@ -396,13 +397,134 @@ class GuidanceEngineTest {
         assertEquals(WarningCode.CameraLow.suggestion, WarningCode.CameraHigh.suggestion)
         assertEquals("Fill about half the frame height, with room above your head to jump", WarningCode.TooFar.suggestion)
         assertEquals(WarningCode.TooFar.suggestion, WarningCode.TooClose.suggestion)
-        assertEquals(13, WarningCode.entries.size)
+        assertEquals(16, WarningCode.entries.size)
         assertEquals(
             setOf(
                 "no_person", "multiple_people", "body_cropped", "camera_moving", "low_light", "low_contrast",
                 "camera_low", "camera_high", "camera_tilted", "too_far", "too_close", "motion_blur", "low_fps",
+                "no_hands", "hand_cropped", "hands_too_close",
             ),
             WarningCode.entries.map { it.code }.toSet(),
         )
+    }
+
+    // ---- POV (hands)
+
+    /** A hand: 21 landmarks inside a box centred at ([cx], [cy]) of size [w] x [h] (frame fractions). */
+    private fun hand(cx: Float = 0.5f, cy: Float = 0.6f, w: Float = 0.2f, h: Float = 0.25f): List<Landmark> =
+        List(HAND_LANDMARK_COUNT) { i ->
+            val f = i / (HAND_LANDMARK_COUNT - 1f)
+            Landmark(cx - w / 2 + w * f, cy - h / 2 + h * f)
+        }
+
+    private fun povFrame(
+        t: Long,
+        hands: List<List<Landmark>> = listOf(hand(0.35f), hand(0.65f)),
+        luma: Float = 120f,
+        fps: Float = 60f,
+    ) = FrameInput(t, 0, emptyList(), luma, null, gravity = Vec3(0f, 5f, -8f), gyroMagnitude = 2f, fps = fps, hands = hands)
+
+    @Test
+    fun povGoodHandsShowNothingEvenWithAMovingCamera() {
+        val e = GuidanceEngine()
+        e.feed(0, 4f) { povFrame(it) }
+        assertTrue(e.status.active.isEmpty(), "unexpected: ${e.status.active.map { it.code }}")
+    }
+
+    @Test
+    fun povNoHandsBlocksAfterOneSecond() {
+        val e = GuidanceEngine()
+        var t = e.feed(0, 1f) { povFrame(it) }
+        t = e.feed(t, 0.8f) { povFrame(it, hands = emptyList()) }
+        assertFalse(e.has(WarningCode.NoHands), "needs a full second without hands")
+        e.feed(t, 0.6f) { povFrame(it, hands = emptyList()) }
+        assertTrue(e.has(WarningCode.NoHands))
+        assertEquals(Severity.Block, e.status.top?.severity)
+        assertEquals("Hold your hands in front of the camera", e.status.top?.suggestion)
+        assertFalse(e.status.ready)
+        assertFalse(e.has(WarningCode.NoPerson))
+    }
+
+    @Test
+    fun povHandCroppedWhenAnyLandmarkIsWithin3PercentOfAnEdge() {
+        val e = GuidanceEngine()
+        val edgeHand = hand(0.5f, 0.6f).toMutableList().also { it[8] = Landmark(0.5f, 0.975f) }
+        e.feed(0, 2f) { povFrame(it, hands = listOf(edgeHand)) }
+        assertTrue(e.has(WarningCode.HandCropped))
+        assertEquals(Severity.Warn, e.status.top?.severity)
+        assertEquals("Keep your hands inside the picture; tilt the phone down more", e.status.top?.suggestion)
+        e.feed(3000, 2f) { povFrame(it, hands = listOf(hand(0.5f, 0.6f))) }
+        assertFalse(e.has(WarningCode.HandCropped))
+        // 4% from the edge is fine.
+        val ok = hand(0.5f, 0.6f).toMutableList().also { it[8] = Landmark(0.5f, 0.96f) }
+        val e2 = GuidanceEngine()
+        e2.feed(0, 2f) { povFrame(it, hands = listOf(ok)) }
+        assertFalse(e2.has(WarningCode.HandCropped))
+    }
+
+    @Test
+    fun povHandsTooCloseWhenABoxIsTallerThan60Percent() {
+        val e = GuidanceEngine()
+        e.feed(0, 3f) { povFrame(it, hands = listOf(hand(0.5f, 0.5f, w = 0.4f, h = 0.7f))) }
+        assertTrue(e.has(WarningCode.HandsTooClose))
+        assertEquals(
+            "Hold your hands a bit farther from the camera",
+            e.status.active.first { it.code == WarningCode.HandsTooClose }.suggestion,
+        )
+        val e2 = GuidanceEngine()
+        e2.feed(0, 3f) { povFrame(it, hands = listOf(hand(0.5f, 0.5f, w = 0.4f, h = 0.55f))) }
+        assertFalse(e2.has(WarningCode.HandsTooClose))
+    }
+
+    @Test
+    fun povStillReportsLowLightAndLowFps() {
+        val e = GuidanceEngine()
+        e.feed(0, 4f) { povFrame(it, luma = 30f, fps = 24f) }
+        assertTrue(e.has(WarningCode.LowLight))
+        assertTrue(e.has(WarningCode.LowFps))
+    }
+
+    @Test
+    fun povMotionBlurNeedsFastWristsInDimLight() {
+        val e = GuidanceEngine()
+        e.feed(0, 3f) { t -> povFrame(t, hands = listOf(hand(0.3f + 0.4f * ((t / 66) % 2), 0.6f)), luma = 70f) }
+        assertTrue(e.has(WarningCode.MotionBlur))
+        val e2 = GuidanceEngine()
+        e2.feed(0, 3f) { t -> povFrame(t, hands = listOf(hand(0.3f + 0.4f * ((t / 66) % 2), 0.6f)), luma = 140f) }
+        assertFalse(e2.has(WarningCode.MotionBlur))
+    }
+
+    private fun povTake(croppedFraction: Float): io.github.mikevillasis.espeonanim.shared.guidance.TakeSummary {
+        val e = GuidanceEngine()
+        e.feed(0, 1f) { povFrame(it) }
+        e.startTake()
+        val edge = hand(0.5f, 0.6f).toMutableList().also { it[8] = Landmark(0.5f, 0.98f) }
+        var t = 2000L
+        val n = 100
+        repeat(n) { i ->
+            val bad = i < (n * croppedFraction).toInt()
+            e.update(povFrame(t, hands = listOf(if (bad) edge else hand(0.5f, 0.6f))))
+            t += 66
+        }
+        return e.finishTake()
+    }
+
+    @Test
+    fun povTakeSummaryUsesTwentyPercentRuleForWarnings() {
+        assertEquals(Verdict.Ok, povTake(0.10f).verdict)
+        val high = povTake(0.30f)
+        assertEquals(Verdict.Warn, high.verdict)
+        assertEquals(listOf("hand_cropped"), high.warningCodes)
+    }
+
+    @Test
+    fun povTakeWithoutHandsIsPoor() {
+        val e = GuidanceEngine()
+        e.startTake()
+        var t = 0L
+        repeat(60) { e.update(povFrame(t, hands = emptyList())); t += 66 }
+        val s = e.finishTake()
+        assertEquals(Verdict.Poor, s.verdict)
+        assertTrue("no_hands" in s.warningCodes)
     }
 }

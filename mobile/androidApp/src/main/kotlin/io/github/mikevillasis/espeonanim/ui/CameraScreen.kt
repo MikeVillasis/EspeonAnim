@@ -43,6 +43,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.mikevillasis.espeonanim.CaptureViewModel
 import io.github.mikevillasis.espeonanim.OverlayState
 import io.github.mikevillasis.espeonanim.shared.guidance.FrameGuide
+import io.github.mikevillasis.espeonanim.shared.guidance.HAND_BONES
+import io.github.mikevillasis.espeonanim.shared.guidance.HAND_LANDMARK_COUNT
+import io.github.mikevillasis.espeonanim.shared.session.ACTION_POV
 import io.github.mikevillasis.espeonanim.shared.guidance.Lm
 import io.github.mikevillasis.espeonanim.shared.guidance.Severity
 import io.github.mikevillasis.espeonanim.shared.guidance.WarningCode
@@ -57,6 +60,7 @@ fun CameraScreen(
     vm: CaptureViewModel,
     modifier: Modifier = Modifier,
     allowFlip: Boolean = true,
+    voiceDefaultOn: Boolean = false,
     center: @Composable BoxScope.() -> Unit = {},
     bottom: @Composable () -> Unit = {},
 ) {
@@ -70,6 +74,7 @@ fun CameraScreen(
     val cameraError by vm.cameraError.collectAsStateWithLifecycle()
     val fps by vm.fps.collectAsStateWithLifecycle()
     val capturing by remember { vm.state.map { it.capturing } }.collectAsStateWithLifecycle(false)
+    val pov by remember { vm.state.map { it.action == ACTION_POV } }.collectAsStateWithLifecycle(false)
 
     val previewView = remember {
         PreviewView(ctx).apply {
@@ -85,13 +90,17 @@ fun CameraScreen(
 
     Box(modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
-        SkeletonOverlay(overlay, cropped = live.has(WarningCode.BodyCropped), modifier = Modifier.fillMaxSize())
+        SkeletonOverlay(
+            overlay, pov = pov,
+            cropped = live.has(if (pov) WarningCode.HandCropped else WarningCode.BodyCropped),
+            modifier = Modifier.fillMaxSize(),
+        )
 
         Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-            GuidanceBanner(vm)
+            GuidanceBanner(vm, pov)
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { center() }
             Column(Modifier.fillMaxWidth().padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                VoiceControls(vm, capturing = capturing, modifier = Modifier.padding(bottom = 8.dp))
+                VoiceControls(vm, capturing = capturing, modifier = Modifier.padding(bottom = 8.dp), defaultOn = voiceDefaultOn)
                 if (fps > 0) {
                     Text(
                         "${fps} fps", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp,
@@ -102,7 +111,7 @@ fun CameraScreen(
             }
         }
 
-        if (allowFlip) {
+        if (allowFlip && !pov) { // POV always uses the back camera
             OutlinedButton(
                 onClick = vm::toggleFacing,
                 modifier = Modifier.align(Alignment.BottomStart).safeDrawingPadding().padding(12.dp),
@@ -122,7 +131,7 @@ fun CameraScreen(
 }
 
 @Composable
-private fun GuidanceBanner(vm: CaptureViewModel) {
+private fun GuidanceBanner(vm: CaptureViewModel, pov: Boolean) {
     val live by vm.live.collectAsStateWithLifecycle()
     val top = live.top
     val (bg, fg) = when (top?.severity) {
@@ -135,7 +144,7 @@ private fun GuidanceBanner(vm: CaptureViewModel) {
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(top?.message ?: "Looking good", color = fg, fontSize = 30.sp, fontWeight = FontWeight.Bold, lineHeight = 34.sp)
-        Text(top?.suggestion ?: "Whole body in view. You're ready.", color = fg, fontSize = 20.sp, lineHeight = 24.sp)
+        Text(top?.suggestion ?: if (pov) "Hands in view. You're ready." else "Whole body in view. You're ready.", color = fg, fontSize = 20.sp, lineHeight = 24.sp)
         if (live.active.size > 1) {
             Text("+${live.active.size - 1} more", color = fg.copy(alpha = 0.85f), fontSize = 16.sp)
         }
@@ -143,7 +152,7 @@ private fun GuidanceBanner(vm: CaptureViewModel) {
 }
 
 @Composable
-private fun SkeletonOverlay(overlay: OverlayState?, cropped: Boolean, modifier: Modifier) {
+private fun SkeletonOverlay(overlay: OverlayState?, pov: Boolean, cropped: Boolean, modifier: Modifier) {
     Canvas(modifier) {
         val aspect = overlay?.frameAspect
             ?: if (size.height >= size.width) 9f / 16f else 16f / 9f
@@ -154,6 +163,18 @@ private fun SkeletonOverlay(overlay: OverlayState?, cropped: Boolean, modifier: 
         if (aspect > viewAspect) { w = size.width; h = size.width / aspect } else { h = size.height; w = size.height * aspect }
         val left = (size.width - w) / 2f
         val top = (size.height - h) / 2f
+
+        if (pov) {
+            // POV: no body guide; draw each hand's 21 landmarks and bones.
+            val bone = if (cropped) BadRed else Color(0xFF63F2A0)
+            for (hand in overlay?.hands.orEmpty()) {
+                if (hand.size < HAND_LANDMARK_COUNT) continue
+                fun hp(i: Int) = Offset(left + hand[i].x * w, top + hand[i].y * h)
+                for ((a, b) in HAND_BONES) drawLine(bone, hp(a), hp(b), strokeWidth = 4.dp.toPx())
+                for (i in 0 until HAND_LANDMARK_COUNT) drawCircle(Color.White, radius = 3.5.dp.toPx(), center = hp(i))
+            }
+            return@Canvas
+        }
 
         // Frame guide: where the whole body should fit.
         val guideColor = if (cropped) BadRed else Color.White.copy(alpha = 0.75f)

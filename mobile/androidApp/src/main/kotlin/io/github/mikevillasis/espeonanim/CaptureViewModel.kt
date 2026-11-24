@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.os.SystemClock
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.view.PreviewView
 import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
@@ -13,6 +14,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
 import io.github.mikevillasis.espeonanim.camera.CameraController
+import io.github.mikevillasis.espeonanim.camera.HandAnalyzer
+import io.github.mikevillasis.espeonanim.camera.HandFrame
 import io.github.mikevillasis.espeonanim.camera.ImuRecorder
 import io.github.mikevillasis.espeonanim.camera.PoseAnalyzer
 import io.github.mikevillasis.espeonanim.camera.PoseFrame
@@ -34,6 +37,7 @@ import io.github.mikevillasis.espeonanim.shared.session.Step
 import io.github.mikevillasis.espeonanim.shared.session.RecordedClip
 import io.github.mikevillasis.espeonanim.shared.session.SessionEffect
 import io.github.mikevillasis.espeonanim.shared.session.ACTION_JUMP
+import io.github.mikevillasis.espeonanim.shared.session.ACTION_POV
 import io.github.mikevillasis.espeonanim.shared.session.SessionState
 import io.github.mikevillasis.espeonanim.shared.session.CalibrationPhase
 import io.github.mikevillasis.espeonanim.shared.session.VoiceAction
@@ -61,8 +65,13 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
-/** Landmarks to draw, in upright frame coordinates. */
-data class OverlayState(val landmarks: List<Landmark>, val frameAspect: Float, val mirrored: Boolean)
+/** Landmarks to draw, in upright frame coordinates: one body ([landmarks]) or the [hands] of POV mode. */
+data class OverlayState(
+    val landmarks: List<Landmark>,
+    val frameAspect: Float,
+    val mirrored: Boolean,
+    val hands: List<List<Landmark>> = emptyList(),
+)
 
 sealed interface ExportState {
     data object Idle : ExportState
@@ -86,7 +95,9 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     val jumpPhase: StateFlow<JumpPhase> = _jumpPhase.asStateFlow()
     private val imu = ImuRecorder(app)
     private val controller = CameraController(app)
-    private var analyzer: PoseAnalyzer? = null
+    private var poseAnalyzer: PoseAnalyzer? = null
+    private var handAnalyzer: HandAnalyzer? = null
+    private val isPov: Boolean get() = state.value.action == ACTION_POV
 
     private val _live = MutableStateFlow(LiveStatus())
     val live: StateFlow<LiveStatus> = _live.asStateFlow()
@@ -141,10 +152,24 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     private fun micPermissionGranted() =
         ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
-    fun setVoiceEnabled(on: Boolean) {
-        prefs.edit().putBoolean(PREF_VOICE, on).apply()
+    /** [persist] false turns voice on for this app run only (the POV default) without changing the saved choice. */
+    fun setVoiceEnabled(on: Boolean, persist: Boolean = true) {
+        if (persist) prefs.edit().putBoolean(PREF_VOICE, on).apply()
         _micGranted.value = micPermissionGranted()
         _voiceEnabled.value = on
+    }
+
+    private var povVoiceDefaultDone = false
+
+    /**
+     * POV defaults voice commands to on. True once per app run, the first time the POV calibration
+     * screen asks and voice is off; the UI then requests the mic permission. A user who switches voice
+     * off afterwards is not asked again until the app restarts.
+     */
+    fun consumePovVoiceDefault(): Boolean {
+        if (povVoiceDefaultDone) return false
+        povVoiceDefaultDone = true
+        return !_voiceEnabled.value
     }
 
     /** Call after the RECORD_AUDIO prompt or when returning from Settings. */
@@ -195,7 +220,11 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ---- Setup / flow ----
-    fun setAction(action: String) = session.setAction(action)
+    fun setAction(action: String) {
+        session.setAction(action)
+        if (isPov) _front.value = false // POV always uses the back camera
+    }
+    fun setPovMount(mount: String) = session.setPovMount(mount)
     fun setHeight(text: String) = session.setPerformerHeight(text.toIntOrNull())
     fun continueFromSetup() = session.continueFromSetup()
     fun backToSetup() = session.backToSetup()
@@ -236,7 +265,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun toggleFacing() {
-        if (!state.value.capturing) _front.value = !_front.value
+        if (!state.value.capturing && !isPov) _front.value = !_front.value
     }
 
     // ---- Camera ----
@@ -245,11 +274,21 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 _cameraError.value = null
                 imu.start()
-                val a = analyzer ?: PoseAnalyzer(
-                    appContext,
-                    onFrame = ::onPose,
-                    onError = { t -> _cameraError.value = "Pose analysis problem: ${t.message}" },
-                ).also { analyzer = it }
+                val pov = isPov
+                if (pov) _front.value = false
+                val a: ImageAnalysis.Analyzer = if (pov) {
+                    handAnalyzer ?: HandAnalyzer(
+                        appContext,
+                        onFrame = ::onHands,
+                        onError = { t -> _cameraError.value = "Hand analysis problem: ${t.message}" },
+                    ).also { handAnalyzer = it }
+                } else {
+                    poseAnalyzer ?: PoseAnalyzer(
+                        appContext,
+                        onFrame = ::onPose,
+                        onError = { t -> _cameraError.value = "Pose analysis problem: ${t.message}" },
+                    ).also { poseAnalyzer = it }
+                }
                 controller.bind(owner, previewView, _front.value, a, rotation)
                 _fps.value = controller.targetFps
             } catch (t: Throwable) {
@@ -289,6 +328,27 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
         feedJumpDetector(f)
     }
 
+    /** POV mode: same guidance engine, fed with the hands instead of a body. */
+    private fun onHands(f: HandFrame) {
+        val lens = controller.lens
+        val portrait = f.uprightHeight >= f.uprightWidth
+        val input = FrameInput(
+            timestampMs = f.timestampMs,
+            peopleCount = 0,
+            landmarks = emptyList(),
+            meanLuma = f.luma.mean(),
+            gravity = imu.gravity,
+            gyroMagnitude = imu.gyroMagnitude,
+            fps = controller.targetFps.toFloat(),
+            verticalFovDeg = lens?.verticalFovDeg(portrait) ?: GuidanceConfig.DEFAULT_VERTICAL_FOV_DEG,
+            frontCamera = false,
+            hands = f.hands,
+        )
+        val status = synchronized(engineLock) { engine.update(input) }
+        _live.value = status
+        _overlay.value = OverlayState(emptyList(), f.uprightWidth.toFloat() / f.uprightHeight, mirrored = false, hands = f.hands)
+    }
+
     /** Stops a jump take by itself once the performer has landed and settled. */
     private fun feedJumpDetector(f: PoseFrame) {
         val s = state.value
@@ -309,6 +369,7 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
             is SessionEffect.StartRecording -> startRecording(e.takeId, e.role)
             SessionEffect.StopRecording -> { cues.recordingStopped(); controller.stopRecording() }
             is SessionEffect.CountdownBeep -> cues.countdown()
+            SessionEffect.PhaseChange -> cues.phaseChanged()
             is SessionEffect.DeleteFiles -> viewModelScope.launch(Dispatchers.IO) {
                 e.paths.forEach { runCatching { File(it).delete() } }
             }
@@ -445,7 +506,8 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
         controller.shutdown()
         cues.release()
         imu.stop()
-        analyzer?.close()
+        poseAnalyzer?.close()
+        handAnalyzer?.close()
     }
 
     private companion object {

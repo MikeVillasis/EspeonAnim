@@ -36,6 +36,7 @@ def _doctor():
         "gem body": root / "models/gem-x/body_s240000.ckpt", "gem vitpose": root / "models/gem-x/vitpose.pth",
         "gem motion": root / "models/gem-x/motion_native77_e774_s292175.ckpt", "gem stats": root / "models/gem-x/motion_stats_raw.npz",
         "soma": root / "models/soma/SOMA_neutral.npz", "mediapipe pose": root / "models/pose_landmarker_heavy.task",
+        "mediapipe hands": root / "models/hand_landmarker.task",
     }
     info["weights"] = {k: v.exists() for k, v in weights.items()}
     info["problems"] += [f"weights missing: {k} ({v})" for k, v in weights.items() if not v.exists()]
@@ -58,7 +59,7 @@ def main(argv=None):
     p.add_argument("--device", choices=["cuda", "cpu"], default=None)
     p.add_argument("--keep-intermediate", action="store_true", help="keep prepared video, motion.pt and the unpacked package")
     p.add_argument("--no-ballistic", action="store_true", help="keep the reconstructed jump height instead of a ballistic arc")
-    p.add_argument("--action", choices=["jump", "other"], default=None, help="override the manifest's action (bare videos default to jump)")
+    p.add_argument("--action", choices=["jump", "other", "pov"], default=None, help="override the manifest's action (bare videos default to jump)")
     sub.add_parser("doctor", help="check the environment and print a JSON summary")
     args = ap.parse_args(argv)
 

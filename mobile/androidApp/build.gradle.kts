@@ -7,28 +7,38 @@ plugins {
 }
 
 /**
- * Downloads the MediaPipe Pose Landmarker "lite" model (Apache-2.0) at build time and adds it
- * to the APK assets. Cached in build/ so it only downloads once per clean.
+ * Downloads a MediaPipe model (Pose Landmarker "lite" and Hand Landmarker, both Apache-2.0) at build
+ * time and adds it to the APK assets. Cached in build/ so it only downloads once per clean.
  */
-abstract class DownloadPoseModel : DefaultTask() {
+abstract class DownloadModel : DefaultTask() {
     @get:Input
     abstract val url: Property<String>
+
+    @get:Input
+    abstract val fileName: Property<String>
 
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
     @TaskAction
     fun download() {
-        val target = outputDir.get().asFile.resolve("pose_landmarker_lite.task")
+        val target = outputDir.get().asFile.resolve(fileName.get())
         target.parentFile.mkdirs()
         URI(url.get()).toURL().openStream().use { input -> target.outputStream().use { input.copyTo(it) } }
-        check(target.length() > 1_000_000) { "Downloaded pose model looks too small: ${target.length()} bytes" }
+        check(target.length() > 1_000_000) { "Downloaded model ${fileName.get()} looks too small: ${target.length()} bytes" }
     }
 }
 
-val downloadPoseModel = tasks.register<DownloadPoseModel>("downloadPoseModel") {
+val downloadPoseModel = tasks.register<DownloadModel>("downloadPoseModel") {
     url.set("https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task")
+    fileName.set("pose_landmarker_lite.task")
     outputDir.set(layout.buildDirectory.dir("generated/poseModel"))
+}
+
+val downloadHandModel = tasks.register<DownloadModel>("downloadHandModel") {
+    url.set("https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task")
+    fileName.set("hand_landmarker.task")
+    outputDir.set(layout.buildDirectory.dir("generated/handModel"))
 }
 
 android {
@@ -78,7 +88,8 @@ android {
 
 androidComponents {
     onVariants { variant ->
-        variant.sources.assets?.addGeneratedSourceDirectory(downloadPoseModel, DownloadPoseModel::outputDir)
+        variant.sources.assets?.addGeneratedSourceDirectory(downloadPoseModel, DownloadModel::outputDir)
+        variant.sources.assets?.addGeneratedSourceDirectory(downloadHandModel, DownloadModel::outputDir)
     }
 }
 

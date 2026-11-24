@@ -5,6 +5,7 @@ import io.github.mikevillasis.espeonanim.shared.manifest.CameraInfo
 import io.github.mikevillasis.espeonanim.shared.manifest.DeviceInfo
 import io.github.mikevillasis.espeonanim.shared.manifest.Manifest
 import io.github.mikevillasis.espeonanim.shared.manifest.Performer
+import io.github.mikevillasis.espeonanim.shared.manifest.PovInfo
 import io.github.mikevillasis.espeonanim.shared.manifest.TakeEntry
 import io.github.mikevillasis.espeonanim.shared.manifest.TakeGuidance
 import io.github.mikevillasis.espeonanim.shared.manifest.TakeRole
@@ -110,5 +111,24 @@ class ManifestTest {
     fun rejectsOtherFormats() {
         val json = sample().toJson().replace("espeon-package", "something-else")
         assertFailsWith<IllegalArgumentException> { Manifest.parse(json) }
+    }
+
+    @Test
+    fun povMountIsWrittenOnlyForPov() {
+        val jump = sample()
+        assertFalse(jump.toJson().contains("\"pov\""), "jump manifests stay unchanged")
+        assertNull(Manifest.parse(jump.toJson()).pov)
+
+        val pov = sample().copy(action = "pov", pov = PovInfo("chest"))
+        val json = pov.toJson()
+        assertTrue(json.contains("\"action\": \"pov\""), json)
+        assertTrue(json.contains("\"mount\": \"chest\""), json)
+        assertEquals(pov, Manifest.parse(json))
+    }
+
+    @Test
+    fun oldManifestWithoutPovStillParses() {
+        val m = Manifest.parse(sample().toJson())
+        assertNull(m.pov)
     }
 }

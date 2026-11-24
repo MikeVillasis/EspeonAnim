@@ -34,7 +34,8 @@ def validate_motion(d):
     need(major == 1, f"unsupported motion version {d.get('version')}")
     need(d.get("fps") == 60, "fps must be 60")
     F, bones = d["frame_count"], d["bones"]
-    need(bones[0] == "root" and len(set(bones)) == len(bones), "bones must start with root and be unique")
+    need(len(set(bones)) == len(bones), "bones must be unique")
+    need("root" not in bones or bones[0] == "root", "root must be the first bone")
     for k in ("root_translation", "pelvis_translation"):
         a = np.array(d[k], float)
         need(a.shape == (F, 3), f"{k} shape {a.shape} != ({F}, 3)")

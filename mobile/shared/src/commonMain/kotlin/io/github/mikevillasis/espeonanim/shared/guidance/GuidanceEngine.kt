@@ -54,6 +54,7 @@ class GuidanceEngine(private val config: GuidanceConfig = GuidanceConfig()) {
     private var speedEma = 0f
     private var lastT = -1L
     private var prevLandmarks: List<Landmark>? = null
+    private var prevWrists: List<Landmark> = emptyList()
 
     // Trailing windows (timestamp ms, value) for framing: the standing height is the max of the
     // body-height fraction over the last standingWindowMs (so a crouch or a jump does not look "far"),
@@ -73,7 +74,7 @@ class GuidanceEngine(private val config: GuidanceConfig = GuidanceConfig()) {
     fun reset() {
         trackers.values.forEach { it.clear() }
         lumaEma = null; contrastEma = null; gyroEma = null; speedEma = 0f
-        lastT = -1; prevLandmarks = null
+        lastT = -1; prevLandmarks = null; prevWrists = emptyList()
         heightWin.clear(); offsetWin.clear()
         collecting = false; frames = 0; counts.fill(0)
         lastStatus = LiveStatus()
@@ -94,7 +95,7 @@ class GuidanceEngine(private val config: GuidanceConfig = GuidanceConfig()) {
         contrastEma = input.lumaContrast?.let { smooth(contrastEma, it, dt, 1000f) } ?: contrastEma
         gyroEma = input.gyroMagnitude?.let { smooth(gyroEma, it, dt, 300f) } ?: gyroEma
 
-        val raw = evaluate(input, dt)
+        val raw = if (input.hands != null) evaluatePov(input, input.hands, dt) else evaluate(input, dt)
 
         val active = ArrayList<GuidanceMessage>()
         for (code in WarningCode.entries) {
@@ -218,6 +219,53 @@ class GuidanceEngine(private val config: GuidanceConfig = GuidanceConfig()) {
         return out
     }
 
+    /**
+     * POV rules (docs/formats.md section 7). The camera is worn, so nothing about the body or the
+     * camera position is judged: only hands in view, framing of the hands, light, blur and fps.
+     */
+    private fun evaluatePov(input: FrameInput, handsIn: List<List<Landmark>>, dt: Long): Map<WarningCode, Pair<Boolean, Boolean>> {
+        val out = HashMap<WarningCode, Pair<Boolean, Boolean>>()
+        fun put(code: WarningCode, enter: Boolean, hold: Boolean = enter) {
+            out[code] = enter to (hold || enter)
+        }
+        val hands = handsIn.filter { it.size >= HAND_LANDMARK_COUNT }
+
+        put(WarningCode.NoHands, hands.isEmpty())
+        lumaEma?.let { put(WarningCode.LowLight, it < config.lowLightEnter, it < config.lowLightHold) }
+        if (input.fps > 0f) put(WarningCode.LowFps, input.fps < config.lowFpsBelow)
+
+        if (hands.isEmpty()) {
+            prevWrists = emptyList()
+            return out
+        }
+
+        val enterMargin = config.handCropMargin
+        val holdMargin = config.handCropHoldMargin
+        fun nearEdge(h: List<Landmark>, m: Float) =
+            h.any { it.x < m || it.x > 1f - m || it.y < m || it.y > 1f - m }
+        put(WarningCode.HandCropped, hands.any { nearEdge(it, enterMargin) }, hands.any { nearEdge(it, holdMargin) })
+
+        fun boxHeight(h: List<Landmark>) = h.maxOf { it.y } - h.minOf { it.y }
+        val tallest = hands.maxOf { boxHeight(it) }
+        put(WarningCode.HandsTooClose, tallest > config.handsTooCloseEnter, tallest > config.handsTooCloseHold)
+
+        // Motion blur proxy: fastest wrist, matched to the nearest wrist of the previous frame so the
+        // detector's hand order does not matter.
+        val wrists = hands.map { it[0] }
+        if (prevWrists.isNotEmpty() && dt > 0) {
+            var fastest = 0f
+            for (w in wrists) {
+                val d = prevWrists.minOf { hypot(w.x - it.x, w.y - it.y) }
+                fastest = maxOf(fastest, d / (dt / 1000f))
+            }
+            speedEma = smooth(speedEma, fastest, dt, 250f)
+        }
+        prevWrists = wrists
+        val dim = (lumaEma ?: input.meanLuma) < config.blurLumaMax
+        put(WarningCode.MotionBlur, dim && speedEma > config.blurHandSpeedEnter, dim && speedEma > config.blurHandSpeedHold)
+        return out
+    }
+
     /** Ends the take and produces its verdict from the frames seen since [startTake]. */
     fun finishTake(): TakeSummary {
         collecting = false
@@ -233,6 +281,12 @@ class GuidanceEngine(private val config: GuidanceConfig = GuidanceConfig()) {
         val reasons = ArrayList<String>()
         if (n < config.minAnalyzedFrames) {
             reasons += "Too few frames could be checked, so the take cannot be judged."
+        }
+        if (frac(WarningCode.NoHands) >= config.poorNoHandsFraction) {
+            reasons += "Your hands were not visible for ${pct(frac(WarningCode.NoHands))} of the take."
+        }
+        if (frac(WarningCode.HandsTooClose) >= config.poorFramingFraction) {
+            reasons += "Your hands are too close to the phone."
         }
         if (frac(WarningCode.BodyCropped) > config.poorCroppedFraction) {
             reasons += "Your head or feet left the frame in ${pct(frac(WarningCode.BodyCropped))} of the take."

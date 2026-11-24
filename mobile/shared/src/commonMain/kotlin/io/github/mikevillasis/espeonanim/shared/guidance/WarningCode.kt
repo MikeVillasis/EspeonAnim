@@ -20,6 +20,8 @@ enum class WarningCode(
         "Step back until there's space above your head and below your feet",
     ),
     CameraMoving("camera_moving", Severity.Block, "The camera is moving", "Prop the phone up; don't hold it"),
+    // POV mode only (docs/formats.md section 7).
+    NoHands("no_hands", Severity.Block, "I can't see your hands", "Hold your hands in front of the camera"),
     LowLight("low_light", Severity.Warn, "It's too dark", "Turn on more lights or face a window"),
     LowContrast(
         "low_contrast", Severity.Warn, "Clothes blend into the background",
@@ -28,6 +30,14 @@ enum class WarningCode(
     CameraLow("camera_low", Severity.Warn, "Phone is too low", "Place the phone at about waist height"),
     CameraHigh("camera_high", Severity.Warn, "Phone is too high", "Place the phone at about waist height"),
     CameraTilted("camera_tilted", Severity.Warn, "Phone is tilted", "Keep the phone upright and level"),
+    HandCropped(
+        "hand_cropped", Severity.Warn, "Your hands are cut off",
+        "Keep your hands inside the picture; tilt the phone down more",
+    ),
+    HandsTooClose(
+        "hands_too_close", Severity.Warn, "Your hands are too close",
+        "Hold your hands a bit farther from the camera",
+    ),
     TooFar("too_far", Severity.Warn, "You're too far away", "Fill about half the frame height, with room above your head to jump"),
     TooClose("too_close", Severity.Warn, "You're too close", "Fill about half the frame height, with room above your head to jump"),
     MotionBlur(

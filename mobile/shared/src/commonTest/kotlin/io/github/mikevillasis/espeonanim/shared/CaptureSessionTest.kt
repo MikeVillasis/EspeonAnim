@@ -264,4 +264,90 @@ class CaptureSessionTest {
         val e = s.tick(t + 5_000)
         assertEquals("action_01", (e.single() as SessionEffect.StartRecording).takeId)
     }
+
+    @Test
+    fun povCalibrationIsSixSecondsInTwoPhasesWithACueBetween() {
+        val s = CaptureSession()
+        s.setAction("pov")
+        assertEquals("pov", s.state.value.action)
+        s.continueFromSetup()
+        s.startCalibration(0)
+        assertTrue(s.tick(5_000).single() is SessionEffect.StartRecording)
+        assertEquals(CalibrationPhase.APose, s.state.value.calibrationPhase)
+        assertEquals(3_000, s.state.value.remainingMs)
+        assertTrue(s.tick(7_000).isEmpty())
+        assertEquals(CalibrationPhase.APose, s.state.value.calibrationPhase)
+        assertEquals(listOf(SessionEffect.PhaseChange), s.tick(8_000))
+        assertEquals(CalibrationPhase.Turn, s.state.value.calibrationPhase)
+        assertEquals(3_000, s.state.value.remainingMs)
+        assertTrue(s.tick(10_999).isEmpty())
+        assertEquals(listOf(SessionEffect.StopRecording), s.tick(11_000))
+        assertEquals(CalibrationPhase.Finalizing, s.state.value.calibrationPhase)
+    }
+
+    @Test
+    fun jumpCalibrationHasNoPhaseCue() {
+        val s = CaptureSession()
+        s.continueFromSetup()
+        s.startCalibration(0)
+        s.tick(5_000)
+        assertTrue(s.tick(8_000).isEmpty())
+        assertEquals(CalibrationPhase.Turn, s.state.value.calibrationPhase)
+    }
+
+    @Test
+    fun povTakeCapIs30Seconds() {
+        val s = CaptureSession()
+        s.setAction("pov")
+        s.doPovCalibration()
+        s.startTake(20_000)
+        assertTrue(s.tick(25_000).single() is SessionEffect.StartRecording)
+        assertEquals(30_000, s.state.value.remainingMs)
+        assertTrue(s.tick(25_000 + 29_999).isEmpty())
+        assertEquals(listOf(SessionEffect.StopRecording), s.tick(25_000 + 30_000))
+    }
+
+    @Test
+    fun povMountIsSetupOnlyDefaultsToHeadAndGoesIntoManifest() {
+        val s = CaptureSession()
+        assertEquals("head", s.state.value.povMount)
+        s.setAction("pov")
+        s.setPovMount("chest")
+        s.setPovMount("knee") // ignored
+        assertEquals("chest", s.state.value.povMount)
+        val t = s.doPovCalibration()
+        s.setPovMount("head") // not on Setup any more
+        assertEquals("chest", s.state.value.povMount)
+        s.startTake(t)
+        s.tick(t + 5_000)
+        s.stopTakeEarly()
+        s.onRecordingFinished(clip("a1", Verdict.Ok))
+        s.keepTake()
+        assertTrue(s.goToPackage())
+        val plan = s.buildPackage("2026-11-09T03:12:00Z", AppInfo("EspeonAnim", "0.1.0", "android"), DeviceInfo("G", "P", "13"))
+        assertEquals("pov", plan.manifest.action)
+        assertEquals("chest", plan.manifest.pov?.mount)
+        s.startOver()
+        assertEquals("pov", s.state.value.action)
+        assertEquals("chest", s.state.value.povMount)
+    }
+
+    private fun CaptureSession.doPovCalibration(): Long {
+        continueFromSetup()
+        startCalibration(0); tick(5_000); tick(8_000); tick(11_000)
+        onRecordingFinished(clip("calibration", null))
+        acceptCalibration()
+        return 11_000
+    }
+
+    @Test
+    fun nonPovPackageHasNoPovField() {
+        val s = CaptureSession()
+        var t = s.doCalibration()
+        t = s.recordTake(t, Verdict.Ok, "a1")
+        s.keepTake()
+        assertTrue(s.goToPackage())
+        val plan = s.buildPackage("2026-11-09T03:12:00Z", AppInfo("EspeonAnim", "0.1.0", "android"), DeviceInfo("G", "P", "13"))
+        assertEquals(null, plan.manifest.pov)
+    }
 }

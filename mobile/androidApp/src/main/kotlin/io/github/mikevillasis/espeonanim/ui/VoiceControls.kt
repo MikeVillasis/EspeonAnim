@@ -16,6 +16,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,16 +37,27 @@ import io.github.mikevillasis.espeonanim.voice.VoiceState
  * Turning it on asks for the microphone permission first; if refused, explains and links to Settings.
  */
 @Composable
-fun VoiceControls(vm: CaptureViewModel, capturing: Boolean, modifier: Modifier = Modifier) {
+fun VoiceControls(vm: CaptureViewModel, capturing: Boolean, modifier: Modifier = Modifier, defaultOn: Boolean = false) {
     val ctx = LocalContext.current
     val enabled by vm.voiceEnabled.collectAsStateWithLifecycle()
     val voiceState by vm.voiceState.collectAsStateWithLifecycle()
     val micGranted by vm.micGranted.collectAsStateWithLifecycle()
     var refused by remember { mutableStateOf(false) }
+    var autoRequest by remember { mutableStateOf(false) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         vm.refreshMicPermission()
         refused = !ok
-        if (ok) vm.setVoiceEnabled(true)
+        // The POV default is for this app run only; a manual switch-on is remembered as before.
+        if (ok) vm.setVoiceEnabled(true, persist = !autoRequest)
+        autoRequest = false
+    }
+    // POV: voice commands default to on, once per app run (see CaptureViewModel.consumePovVoiceDefault).
+    LaunchedEffect(defaultOn) {
+        if (defaultOn && vm.consumePovVoiceDefault()) {
+            autoRequest = true
+            vm.refreshMicPermission()
+            launcher.launch(Manifest.permission.RECORD_AUDIO)
+        }
     }
     val needsPermission = !micGranted && (refused || enabled)
 
@@ -58,6 +70,7 @@ fun VoiceControls(vm: CaptureViewModel, capturing: Boolean, modifier: Modifier =
             Switch(
                 checked = enabled,
                 onCheckedChange = { on ->
+                    autoRequest = false
                     if (!on) { refused = false; vm.setVoiceEnabled(false) }
                     else {
                         vm.refreshMicPermission()

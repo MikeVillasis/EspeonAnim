@@ -9,6 +9,7 @@ from .framing import framing_codes
 from .analysis import Gem
 from .gem_stage import ProcessorError, landmark_stats, reconstruct
 from .motion_io import motion_dict, validate_motion, write_motion
+from .pov import motion_dict_pov
 from .package import load_capture, take_mirrored
 from .skeleton import Profile, Rig
 from .solve import manny_leg_length, solve
@@ -17,7 +18,7 @@ from .validate import direction_error
 FRAMING_CODES = {"too_far", "too_close", "camera_low", "camera_high"}
 PROCESSOR_VERSION = "0.1.0"
 ASSUMED_HEIGHT_CM = 170.0
-ACTIONS = ("jump", "other")
+ACTIONS = ("jump", "other", "pov")
 
 # code -> (severity, message, suggestion). severity: info | warn | block (block => quality "poor")
 WARNINGS = {
@@ -46,6 +47,12 @@ WARNINGS = {
     "trim_fallback": ("warn", "The action window could not be located precisely; a fallback was used.",
                       "Make sure the whole jump, including the landing, is in the video."),
     "multiple_jumps": ("info", "Found {n} jumps; kept the best one.", "Do one jump per take."),
+    "hands_lost": ("warn", "A hand was out of view for a large part of the take.",
+                   "Keep both hands in front of the camera and tilt the phone down more."),
+    "hand_cropped": ("warn", "A hand touched the edge of the picture in many frames.",
+                     "Keep your hands inside the picture; tilt the phone down more."),
+    "hands_too_close": ("warn", "A hand filled most of the picture height in many frames.",
+                        "Hold your hands a bit farther from the camera."),
     "weak_jump": ("warn", "The jump is small, so the reconstructed airtime and height may be inaccurate.",
                   "Jump higher and with a clear crouch beforehand."),
 }
@@ -132,7 +139,7 @@ def _round(d, n=4):
 
 def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_intermediate=False, emit=None, ballistic=True, action=None):
     """Run the whole pipeline. Returns {"motion": path, "report": path}. Raises ProcessorError on failure.
-    `action` overrides the manifest's action ("jump" | "other")."""
+    `action` overrides the manifest's action ("jump" | "other" | "pov"). "pov" never runs GEM-X (no GPU needed)."""
     from .debug_plots import contact_sheet, height_plot, root_xy_plot
     prog = Progress(emit)
     t_start = time.time()
@@ -154,6 +161,8 @@ def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_interme
     if action not in ACTIONS:
         action = "other"          # unknown actions get the generic, jump-agnostic processing
     is_jump = action == "jump"
+    if action == "pov":
+        return _process_pov(cap, input_path, skeleton, profile, out_dir, cache, work, dbg, prog, keep_intermediate, t_start)
     takes = ([cap.calibration] if cap.calibration else []) + list(cap.actions)
     prog("extract", 0.02, f"{len(cap.actions)} action take(s)" + (", 1 calibration take" if cap.calibration else ""))
 
@@ -322,6 +331,100 @@ def process(input_path, out_dir, skeleton="ue5_manny", device=None, keep_interme
                     "take_scores": [s[3] for s in scored], "calibration": calib_info, "scale": round(scale, 4),
                     "trim": trim, "retarget_direction_error_deg": {"mean": round(mean_err, 3), **{k: round(v, 2) for k, v in seg_err.items()}},
                     "selection": selection, "ballistic_flights": solved.stats.get("ballistic", []), "ballistic_enabled": bool(ballistic and is_jump), "action": action,
+                    "timings": timings, "input": str(input_path)},
+    }
+    timings["total_s"] = round(time.time() - t_start, 1)
+    report_path.write_text(json.dumps(report, indent=1), encoding="utf-8")
+    if not keep_intermediate:
+        shutil.rmtree(work, ignore_errors=True)
+    prog("export", 1.0, "Done")
+    return {"motion": str(motion_path.resolve()), "report": str(report_path.resolve()), "quality": quality, "chosen_take": take.id}
+
+
+def _process_pov(cap, input_path, skeleton, profile, out_dir, cache, work, dbg, prog, keep_intermediate, t_start):
+    """POV action (docs/formats.md section 7): hand tracking -> head frame -> Manny arms, hands and fingers."""
+    from . import pov, pov_detect, pov_geom
+    from .pov_debug import pov_debug_png
+    from .pov_retarget import PovRig
+    timings, warnings, assumptions = {}, [], []
+    rig = PovRig(profile)
+    mount = ((cap.manifest or {}).get("pov") or {}).get("mount")
+    if mount not in ("head", "chest"):
+        if mount is not None:
+            assumptions.append(f"unknown pov.mount {mount!r} in the manifest: treated as head")
+        mount = "head"
+    height_cm = cap.performer_height_cm or ASSUMED_HEIGHT_CM
+    takes = ([cap.calibration] if cap.calibration else []) + list(cap.actions)
+    prog("extract", 0.02, f"{len(cap.actions)} action take(s)" + (", 1 hands calibration take" if cap.calibration else ""))
+
+    t0 = time.time()
+    tracks = {}
+    span = 0.8 / len(takes)
+    for k, t in enumerate(takes):
+        lo = 0.02 + k * span
+        tracks[t.id] = pov_detect.track_video(t.path, cache, take_mirrored(t.info), prog.sub("detect", lo, lo + span),
+                                              keep_intermediate, t.id)
+    timings["detect_s"] = round(time.time() - t0, 1)
+
+    prog("analyze", 0.84, "Scoring takes")
+    scored = [(pov.take_score(s), t, s) for t in cap.actions for s in [pov.take_stats(tracks[t.id])]]
+    scored.sort(key=lambda x: -x[0])
+    score, take, _ = scored[0]
+    track = tracks[take.id]
+    selection = {"reason": "highest detection confidence and fewest lost-hand frames"}
+
+    info = take.info or {}
+    cam = pov_geom.Camera.from_take(info, track.width, track.height)
+    g = None
+    if info.get("imu_file"):
+        g = framing.gravity_from_csv(Path(take.path).with_name(Path(info["imu_file"]).name))
+    calib_track = tracks[cap.calibration.id] if cap.calibration else None
+    if calib_track is None:
+        warnings.append(make_warning("calibration_missing", message="No hands calibration clip: hand size was estimated from the action take.",
+                                     suggestion="Record the short hands calibration clip for a better fit."))
+    prog("retarget", 0.88, "Retargeting hands to " + skeleton)
+    t0 = time.time()
+    sol = pov.solve_pov(track, calib_track, cam, g, info.get("rotation_deg"), mount, height_cm, rig, assumptions,
+                        height_assumed=not cap.performer_height_cm)
+    assumptions = sol.assumptions + list(cap.notes)
+    timings["solve_s"] = round(time.time() - t0, 2)
+
+    a, b = int(sol.window_s[0] * track.fps), int(np.ceil(sol.window_s[1] * track.fps))
+    st = pov.take_stats(track, (a, b))
+    for s, nm in (("l", "left"), ("r", "right")):
+        lost = st["lost_" + s]
+        if lost > pov.LOST_WARN_FRACTION:
+            warnings.append(make_warning("hands_lost", message=f"The {nm} hand was out of view {100 * lost:.0f}% of the time."))
+    for code, key in (("hand_cropped", "hand_cropped_fraction"), ("hands_too_close", "hands_too_close_fraction")):
+        if st[key] >= pov.REPORT_FRACTION:
+            warnings.append(make_warning(code, message=WARNINGS[code][1].rstrip(".") + f" ({100 * st[key]:.0f}% of the frames)."))
+    if track.mean_luma < 70:
+        warnings.append(make_warning("low_light", message=f"The video is dark (mean luma {track.mean_luma:.0f}/255)."))
+    if track.fps < 29.5:
+        warnings.append(make_warning("low_fps"))
+    for w in take.guidance_warnings:
+        if w in ("low_light", "low_fps") and not any(x["code"] == w for x in warnings):
+            warnings.append(make_warning(w))
+    assumptions.append("fingers: bone directions aligned to MediaPipe segments; metacarpals, twist and corrective bones keep the reference pose")
+
+    prog("export", 0.95, "Writing motion.json")
+    md = motion_dict_pov(sol, rig, skeleton)
+    validate_motion(md)
+    motion_path, report_path = out_dir / "motion.json", out_dir / "report.json"
+    write_motion(motion_path, md)
+    pov_debug_png(dbg / "pov_hands.png", sol, rig, title=f"{take.id} ({Path(str(input_path)).name})")
+
+    quality = _quality(warnings, {"score": score})
+    report = {
+        "format": "espeon-report", "version": "1.0", "chosen_take": take.id, "quality": quality,
+        "warnings": [{k: v for k, v in w.items() if k != "severity"} for w in warnings],
+        "stats": {"frames_in": int(track.T), "frames_out": md["frame_count"], "mean_keypoint_confidence": round(st["mean_confidence"], 3),
+                  "foot_contact_frames": 0, "output_seconds": round(md["frame_count"] / 60, 3)},
+        "assumptions": assumptions,
+        "details": {"processor_version": PROCESSOR_VERSION, "skeleton": skeleton, "device": "none (POV needs no GPU)",
+                    "take_scores": [{"id": x[1].id, "score": x[0], **{k: round(float(v), 3) for k, v in x[2].items()}} for x in scored],
+                    "trim": {"action": "pov", "mode": "hands_visible", "start_s": round(sol.window_s[0], 3), "end_s": round(sol.window_s[1], 3)},
+                    "selection": selection, "action": "pov", "pov": pov.details_pov(sol, st),
                     "timings": timings, "input": str(input_path)},
     }
     timings["total_s"] = round(time.time() - t_start, 1)
